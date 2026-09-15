@@ -536,6 +536,9 @@ body {
     overflow-y: auto;
     padding: 8px 12px;
     -webkit-overflow-scrolling: touch;
+    /* 앱 전체는 user-select: none이지만 디버그 로그는 복사가 목적이므로 예외 처리 */
+    -webkit-user-select: text;
+    user-select: text;
 }
 
 .debug-log-line {
