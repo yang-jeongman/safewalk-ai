@@ -10,6 +10,7 @@ const urlsToCache = [
     './src/warning/warningSystem.js',
     './src/ui/uiController.js',
     './src/utils/dataManager.js',
+    './src/utils/debugLogger.js',
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0',
     'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd'
 ];

@@ -29,6 +29,7 @@
         <header class="app-header">
             <h1 class="app-title">SafeWalk</h1>
             <div class="header-actions">
+                <button id="btnDebug" class="icon-btn" aria-label="디버그">🐛</button>
                 <button id="btnSettings" class="icon-btn" aria-label="설정">⚙️</button>
                 <button id="btnInfo" class="icon-btn" aria-label="정보">ℹ️</button>
             </div>
@@ -145,6 +146,16 @@
                 </label>
             </div>
         </div>
+    </div>
+
+    <!-- 디버그 패널 (실기기 온스크린 로그) -->
+    <div id="debugPanel" class="debug-panel">
+        <div class="debug-panel-header">
+            <span>디버그 로그</span>
+            <button id="btnDebugClear" class="debug-panel-btn">지우기</button>
+            <button id="btnDebugClose" class="debug-panel-btn">닫기</button>
+        </div>
+        <div id="debugLogList" class="debug-log-list"></div>
     </div>
 
     <!-- 스크립트 -->

@@ -1,4 +1,6 @@
 // 경고 시스템 모듈
+import { debugLogger } from '../utils/debugLogger.js';
+
 export class WarningSystem {
     constructor() {
         this.voiceEnabled = true;
@@ -20,12 +22,14 @@ export class WarningSystem {
         // 한국어 음성 찾기
         const voices = this.synth.getVoices();
         this.voice = voices.find(v => v.lang.includes('ko')) || voices[0];
+        debugLogger.log(`[음성] 초기 voices=${voices.length}개, 선택=${this.voice ? `${this.voice.name}/${this.voice.lang}` : '없음'}`);
 
         // 음성 로드 이벤트
         if (speechSynthesis.onvoiceschanged !== undefined) {
             speechSynthesis.onvoiceschanged = () => {
                 const voices = this.synth.getVoices();
                 this.voice = voices.find(v => v.lang.includes('ko')) || voices[0];
+                debugLogger.log(`[음성] onvoiceschanged voices=${voices.length}개, 선택=${this.voice ? `${this.voice.name}/${this.voice.lang}` : '없음'}`);
             };
         }
     }
@@ -152,10 +156,18 @@ export class WarningSystem {
         const utterance = new SpeechSynthesisUtterance(' ');
         utterance.volume = 0;
         this._unlockUtterance = utterance;
+
+        utterance.onstart = () => debugLogger.log('[unlock] onstart');
+        utterance.onend = () => debugLogger.log('[unlock] onend');
+        utterance.onerror = (e) => debugLogger.log(`[unlock] onerror: ${e.error}`);
+
+        debugLogger.log(`[unlock] speak() 호출, speaking=${this.synth.speaking} pending=${this.synth.pending} paused=${this.synth.paused}`);
         this.synth.speak(utterance);
     }
 
     speak(text, rate = 1, pitch = 1) {
+        debugLogger.log(`[speak] 요청: "${text}" speaking=${this.synth.speaking} pending=${this.synth.pending} paused=${this.synth.paused}`);
+
         // 이전 음성 중지
         if (this.synth.speaking || this.synth.pending) {
             this.synth.cancel();
@@ -167,11 +179,16 @@ export class WarningSystem {
         utterance.pitch = pitch;
         utterance.volume = 1;
 
+        utterance.onstart = () => debugLogger.log(`[speak] onstart: "${text}"`);
+        utterance.onend = () => debugLogger.log(`[speak] onend: "${text}"`);
+        utterance.onerror = (e) => debugLogger.log(`[speak] onerror: ${e.error} ("${text}")`);
+
         // iOS Safari는 지역 변수만 참조된 SpeechSynthesisUtterance를
         // 재생 전에 GC로 수거해버리는 버그가 있다(에러 없이 조용히 무음).
         // 인스턴스에 참조를 유지해 GC 대상에서 제외한다.
         this._utterance = utterance;
         this.synth.speak(utterance);
+        debugLogger.log(`[speak] speak() 호출 직후 speaking=${this.synth.speaking} pending=${this.synth.pending}`);
     }
 
     showVisualAlert(message, type) {

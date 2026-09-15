@@ -3,6 +3,7 @@ import { DetectionManager } from '../detection/detectionManager.js';
 import { WarningSystem } from '../warning/warningSystem.js';
 import { UIController } from '../ui/uiController.js';
 import { DataManager } from '../utils/dataManager.js';
+import { debugLogger } from '../utils/debugLogger.js';
 
 class SafeWalkApp {
     constructor() {
@@ -19,14 +20,17 @@ class SafeWalkApp {
 
     async init() {
         console.log('SafeWalk AI 초기화 중...');
+        debugLogger.init();
 
         // Service Worker 등록
         if ('serviceWorker' in navigator) {
             try {
                 await navigator.serviceWorker.register('./sw.js');
                 console.log('Service Worker 등록 완료');
+                debugLogger.log('Service Worker 등록 완료');
             } catch (err) {
                 console.error('Service Worker 등록 실패:', err);
+                debugLogger.log(`Service Worker 등록 실패: ${err}`);
             }
         }
 
@@ -71,6 +75,11 @@ class SafeWalkApp {
             this.uiController.switchScreen('settings');
         });
 
+        // 디버그 패널
+        document.getElementById('btnDebug').addEventListener('click', () => debugLogger.toggle());
+        document.getElementById('btnDebugClose').addEventListener('click', () => debugLogger.hide());
+        document.getElementById('btnDebugClear').addEventListener('click', () => debugLogger.clear());
+
         // 뒤로 가기 버튼
         document.querySelectorAll('.btn-back').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -94,20 +103,24 @@ class SafeWalkApp {
 
         // 카메라 및 탐지 시작
         try {
+            debugLogger.log('[카메라] DetectionManager 초기화 시작');
             this.detectionManager = new DetectionManager();
             await this.detectionManager.init();
+            debugLogger.log('[카메라] 초기화 완료 (모델 로드 + getUserMedia 성공)');
 
             // 탐지 콜백 설정
             this.detectionManager.onDetection = (threats) => this.handleDetection(threats);
 
             // 탐지 시작
             await this.detectionManager.start();
+            debugLogger.log('[카메라] 탐지 루프 시작');
 
             // 타이머 시작
             this.startWalkTimer();
 
         } catch (error) {
             console.error('카메라 시작 실패:', error);
+            debugLogger.log(`[카메라] 시작 실패: ${error}`);
             this.uiController.showAlert('카메라 접근 권한이 필요합니다', 'error');
             this.stopWalking();
         }
