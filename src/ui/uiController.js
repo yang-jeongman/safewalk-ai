@@ -211,6 +211,16 @@ export class UIController {
                 sensitivity.value = saved;
             }
         }
+
+        // 미지 객체 학습 참여 (Phase 2 open-set 인식, 기본값 OFF)
+        const unknownObjectContribution = document.getElementById('unknownObjectContribution');
+        if (unknownObjectContribution) {
+            unknownObjectContribution.addEventListener('change', (e) => {
+                localStorage.setItem('unknownObjectContribution', String(e.target.checked));
+            });
+
+            unknownObjectContribution.checked = localStorage.getItem('unknownObjectContribution') === 'true';
+        }
     }
 
     // 통계 표시 업데이트

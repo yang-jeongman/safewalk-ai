@@ -131,7 +131,8 @@ export class WarningSystem {
             'bicycle': '자전거',
             'person': '사람',
             'traffic light': '신호등',
-            'stop sign': '정지 표지판'
+            'stop sign': '정지 표지판',
+            'unknown': '정체불명의 물체' // Phase 2 open-set 인식 결과
         };
 
         const objName = objectNames[objClass] || objClass;

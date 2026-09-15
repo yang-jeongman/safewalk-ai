@@ -8,12 +8,16 @@ const urlsToCache = [
     './src/core/app.js',
     './src/detection/detectionManager.js',
     './src/detection/motionGate.js',
+    './src/detection/objectEmbedding.js',
+    './src/detection/knownObjectGallery.js',
     './src/warning/warningSystem.js',
     './src/ui/uiController.js',
     './src/utils/dataManager.js',
     './src/utils/debugLogger.js',
+    './data/known-objects-gallery.json',
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0',
-    'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd'
+    'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',
+    'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet'
 ];
 
 // 설치 이벤트

@@ -479,6 +479,13 @@ body {
     background: white;
 }
 
+.setting-desc {
+    color: var(--text-light);
+    font-size: 12px;
+    line-height: 1.5;
+    padding-top: 4px;
+}
+
 /* 반응형 */
 @media (min-width: 768px) {
     .main-content {

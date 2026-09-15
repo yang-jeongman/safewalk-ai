@@ -1,5 +1,7 @@
 // 객체 탐지 관리 모듈
 import { MotionGate } from './motionGate.js';
+import { ObjectEmbedding } from './objectEmbedding.js';
+import { KnownObjectGallery } from './knownObjectGallery.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 export class DetectionManager {
@@ -35,6 +37,16 @@ export class DetectionManager {
         this._perfStage2Count = 0;
         this._perfWindowStart = 0;
 
+        // Phase 2: open-set 객체 인식 (docs/phase2-design.md)
+        // COCO-SSD 저confidence 박스만 임베딩으로 재확인 — 전체를 다시 돌리지 않는다.
+        this.embedding = null;
+        this.knownGallery = null;
+        this.openSetEnabled = true;
+        this.lowConfidenceThreshold = 0.6; // 이보다 낮은 score만 재확인 대상
+        this.knownSimilarityThreshold = 0.7; // 실측 후 조정 필요
+        this.maxEmbeddingChecksPerCycle = 2; // 사이클당 재확인 상한 (비용 제한)
+        this._cropCanvas = null;
+
         // 위험 객체 정의
         this.threatLevels = {
             'car': 0.9,
@@ -44,7 +56,10 @@ export class DetectionManager {
             'bicycle': 0.7,
             'person': 0.5,
             'traffic light': 0.4,
-            'stop sign': 0.4
+            'stop sign': 0.4,
+            // 미지 객체는 절대 "안전"으로 취급하지 않는다 — 사람과 동급 기본 위협도
+            // (브리프 §3.2 안전 원칙: 미지 = 저위험이 아니라 "정체불명의 물체"로 중간 위협도)
+            'unknown': 0.5
         };
 
         // 아이콘 매핑
@@ -78,6 +93,24 @@ export class DetectionManager {
         console.log('AI 모델 로딩 중...');
         this.model = await cocoSsd.load();
         console.log('AI 모델 로드 완료');
+
+        // Phase 2: open-set 인식 준비 — 실패해도 COCO-SSD 단독 동작은 막지 않는다
+        if (this.openSetEnabled) {
+            try {
+                this.embedding = new ObjectEmbedding();
+                await this.embedding.load();
+
+                this.knownGallery = new KnownObjectGallery();
+                await this.knownGallery.load();
+
+                debugLogger.log(`[오픈셋] 준비 완료, 갤러리 항목=${this.knownGallery.entries.length}개`);
+            } catch (err) {
+                console.error('오픈셋 인식 초기화 실패:', err);
+                debugLogger.log(`[오픈셋] 초기화 실패, 비활성화: ${err}`);
+                this.embedding = null;
+                this.knownGallery = null;
+            }
+        }
     }
 
     async setupCamera() {
@@ -183,7 +216,12 @@ export class DetectionManager {
     // 2단계: COCO-SSD 분류 + 기존 위협도 로직(그대로 재사용)
     async runStage2(gate) {
         try {
-            const predictions = await this.model.detect(this.video);
+            let predictions = await this.model.detect(this.video);
+
+            // Phase 2: 저confidence 박스만 임베딩으로 재확인 (open-set)
+            if (this.embedding && this.knownGallery) {
+                predictions = await this.resolveOpenSet(predictions);
+            }
 
             // 캔버스 클리어
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -205,6 +243,74 @@ export class DetectionManager {
 
         } catch (error) {
             console.error('탐지 오류:', error);
+        }
+    }
+
+    // Phase 2: COCO-SSD 저confidence 박스만 임베딩으로 재확인 (open-set 인식)
+    async resolveOpenSet(predictions) {
+        const candidates = predictions
+            .map((p, index) => ({ p, index }))
+            .filter(({ p }) => p.score < this.lowConfidenceThreshold)
+            .slice(0, this.maxEmbeddingChecksPerCycle);
+
+        for (const { p, index } of candidates) {
+            try {
+                const crop = this.cropVideoRegion(p.bbox, 224);
+                const embedding = await this.embedding.embed(crop);
+                const { entry, similarity } = this.knownGallery.match(embedding);
+
+                if (entry && similarity >= this.knownSimilarityThreshold) {
+                    debugLogger.log(`[오픈셋] "${p.class}"(${p.score.toFixed(2)}) → "${entry.category}"로 재판정 (유사도=${similarity.toFixed(2)})`);
+                    predictions[index] = { ...p, class: entry.category };
+                } else {
+                    debugLogger.log(`[오픈셋] "${p.class}"(${p.score.toFixed(2)}) → 미지 객체 (최고유사도=${similarity.toFixed(2)})`);
+                    predictions[index] = { ...p, class: 'unknown' };
+                    this.maybeQueueForLabeling(crop, p);
+                }
+            } catch (err) {
+                debugLogger.log(`[오픈셋] 재확인 실패: ${err}`);
+            }
+        }
+
+        return predictions;
+    }
+
+    // 비디오의 bbox 영역을 정사각형으로 크롭 (임베딩 입력용 + 라벨링 큐 업로드용 공용)
+    cropVideoRegion(bbox, size) {
+        const [x, y, w, h] = bbox;
+        if (!this._cropCanvas) {
+            this._cropCanvas = document.createElement('canvas');
+        }
+        this._cropCanvas.width = size;
+        this._cropCanvas.height = size;
+        const ctx = this._cropCanvas.getContext('2d');
+        ctx.drawImage(this.video, x, y, w, h, 0, 0, size, size);
+        return this._cropCanvas;
+    }
+
+    // 미지 객체 라벨링 큐 (docs/phase2-design.md §등록 경로).
+    // 기본값 OFF, 사용자가 설정에서 명시적으로 옵트인해야 동작한다.
+    // TODO: 실제 서버 업로드 트랜스포트 미구현 — 업로드 프록시(Cloudflare Worker 등)
+    // 인프라를 사용자와 함께 결정한 뒤 이 자리에서 실제 전송을 구현한다. 지금은
+    // 로컬 큐에만 쌓아 파이프라인을 확인할 수 있게 해둔다.
+    maybeQueueForLabeling(cropCanvas, pred) {
+        const optedIn = localStorage.getItem('unknownObjectContribution') === 'true';
+        if (!optedIn) return;
+
+        try {
+            const dataUrl = cropCanvas.toDataURL('image/jpeg', 0.6);
+            const queue = JSON.parse(localStorage.getItem('unknownObjectQueue') || '[]');
+            queue.push({
+                dataUrl,
+                originalClass: pred.class,
+                score: pred.score,
+                timestamp: Date.now()
+            });
+            while (queue.length > 20) queue.shift(); // 로컬 큐 크기 제한
+            localStorage.setItem('unknownObjectQueue', JSON.stringify(queue));
+            debugLogger.log(`[오픈셋] 미지 객체 로컬 큐 저장 (${queue.length}개 대기, 업로드 전송은 미구현)`);
+        } catch (err) {
+            debugLogger.log(`[오픈셋] 큐 저장 실패: ${err}`);
         }
     }
 
