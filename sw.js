@@ -1,5 +1,5 @@
 // Service Worker - 오프라인 지원 및 캐싱
-const CACHE_NAME = 'safewalk-v1';
+const CACHE_NAME = 'safewalk-v2';
 const urlsToCache = [
     './',
     './index.html',
@@ -49,38 +49,41 @@ self.addEventListener('activate', (event) => {
     );
 });
 
-// Fetch 이벤트 - 캐시 우선 전략
+// Fetch 이벤트 - 네트워크 우선 전략(같은 출처 파일).
+// 캐시 우선으로 두면 sw.js 자체가 바뀌지 않은 배포에서는 서비스 워커가
+// "업데이트할 게 없다"고 판단해 오래된 JS를 계속 서빙한다 — 한창 반복
+// 수정 중인 프로토타입 단계에는 치명적이라 네트워크 우선으로 바꾼다.
+// (완전 오프라인일 때만 캐시로 폴백 — 오프라인 지원 취지는 유지)
 self.addEventListener('fetch', (event) => {
+    const isSameOrigin = new URL(event.request.url).origin === self.location.origin;
+
+    if (!isSameOrigin) {
+        // 외부 CDN(tfjs, coco-ssd)은 그대로 캐시 우선 유지 — 버전 고정 URL이라 안전
+        event.respondWith(
+            caches.match(event.request).then((cached) => cached || fetch(event.request))
+        );
+        return;
+    }
+
     event.respondWith(
-        caches.match(event.request)
+        fetch(event.request)
             .then((response) => {
-                // 캐시에서 찾으면 반환
-                if (response) {
-                    return response;
-                }
-
-                // 네트워크 요청
-                return fetch(event.request).then((response) => {
-                    // 유효한 응답이 아니면 그대로 반환
-                    if (!response || response.status !== 200 || response.type !== 'basic') {
-                        return response;
-                    }
-
-                    // 응답 복제 (캐시용, 반환용)
+                if (response && response.status === 200 && response.type === 'basic') {
                     const responseToCache = response.clone();
-
                     caches.open(CACHE_NAME).then((cache) => {
                         cache.put(event.request, responseToCache);
                     });
-
-                    return response;
-                });
+                }
+                return response;
             })
             .catch(() => {
-                // 오프라인 폴백
-                if (event.request.destination === 'document') {
-                    return caches.match('./index.html');
-                }
+                // 오프라인일 때만 캐시로 폴백
+                return caches.match(event.request).then((cached) => {
+                    if (cached) return cached;
+                    if (event.request.destination === 'document') {
+                        return caches.match('./index.html');
+                    }
+                });
             })
     );
 });
