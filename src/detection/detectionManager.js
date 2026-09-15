@@ -250,7 +250,10 @@ export class DetectionManager {
     async resolveOpenSet(predictions) {
         const candidates = predictions
             .map((p, index) => ({ p, index }))
-            .filter(({ p }) => p.score < this.lowConfidenceThreshold)
+            // person은 갤러리에 일부러 넣지 않았으므로(프라이버시) 재확인 대상에서도 제외 —
+            // COCO-SSD 자체 판정을 그대로 신뢰한다. 안 그러면 confidence가 애매한
+            // 사람 탐지가 전부 "미지 객체"로 바뀌어 음성 메시지만 불필요하게 부정확해진다.
+            .filter(({ p }) => p.class !== 'person' && p.score < this.lowConfidenceThreshold)
             .slice(0, this.maxEmbeddingChecksPerCycle);
 
         for (const { p, index } of candidates) {
