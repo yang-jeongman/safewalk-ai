@@ -15,6 +15,13 @@ export class DetectionManager {
         this.motionGate = null;
         this.motionGateEnabled = true; // Phase 1 실측 비교용 런타임 토글
 
+        // 실기기 실측 결과, video→canvas 리드백(drawImage+getImageData)이 이
+        // 기기에서 매우 비싸서(수십ms) 매 rAF마다 부르면 루프 자체가 느려졌다.
+        // 게이트 샘플링을 별도 주기로 제한해 리드백 횟수를 줄인다.
+        this.motionGateSampleIntervalMs = 60; // ~16Hz — stage2 기본 주기보다는 훨씬 촘촘함
+        this._lastGateSampleTime = 0;
+        this._lastGateResult = { looming: false, urgency: 0, tau: Infinity };
+
         // 2단계(COCO-SSD) 스케줄링
         // 안전 원칙: 기본 주기는 절대 생략하지 않는다. 모션 게이트는 오직
         // 이 주기를 "앞당기는" 용도로만 쓴다 (브리프 §3.1).
@@ -103,6 +110,8 @@ export class DetectionManager {
         this.isDetecting = true;
         this.lastStage2Time = 0;
         this._perfWindowStart = performance.now();
+        this._lastGateSampleTime = 0;
+        this._lastGateResult = { looming: false, urgency: 0, tau: Infinity };
         this.motionGate?.reset();
         this.loop();
     }
@@ -136,10 +145,20 @@ export class DetectionManager {
         const now = performance.now();
         this._perfStage1Count++;
 
-        // 1단계: class-agnostic 확대율(looming) 계산 — 저비용, 매 프레임
-        const gate = this.motionGateEnabled
-            ? this.motionGate.update()
-            : { looming: false, urgency: 0, tau: Infinity };
+        // 1단계: class-agnostic 확대율(looming) 계산.
+        // 리드백 비용 때문에 매 rAF가 아니라 motionGateSampleIntervalMs 주기로 샘플링하고,
+        // 그 사이 프레임에는 마지막 결과를 재사용한다 (stage1은 여전히 stage2 기본
+        // 주기보다 훨씬 촘촘하게 샘플링되므로 "상시 켜짐" 취지는 유지된다).
+        let gate = this._lastGateResult;
+        if (this.motionGateEnabled) {
+            if (now - this._lastGateSampleTime >= this.motionGateSampleIntervalMs) {
+                gate = this.motionGate.update();
+                this._lastGateResult = gate;
+                this._lastGateSampleTime = now;
+            }
+        } else {
+            gate = { looming: false, urgency: 0, tau: Infinity };
+        }
 
         // 2단계 실행 여부 결정.
         // dueByBaseInterval: 기본 주기 — 모션 게이트와 무관하게 항상 보장됨(안전 원칙).
