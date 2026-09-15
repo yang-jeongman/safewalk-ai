@@ -79,6 +79,13 @@ class SafeWalkApp {
         document.getElementById('btnDebug').addEventListener('click', () => debugLogger.toggle());
         document.getElementById('btnDebugClose').addEventListener('click', () => debugLogger.hide());
         document.getElementById('btnDebugClear').addEventListener('click', () => debugLogger.clear());
+        document.getElementById('btnDebugGate').addEventListener('click', () => {
+            if (!this.detectionManager) {
+                debugLogger.log('[모션게이트] 보행 모드가 시작된 뒤에만 토글할 수 있습니다');
+                return;
+            }
+            this.detectionManager.toggleMotionGate();
+        });
 
         // 뒤로 가기 버튼
         document.querySelectorAll('.btn-back').forEach(btn => {

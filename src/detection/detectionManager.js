@@ -1,4 +1,7 @@
 // 객체 탐지 관리 모듈
+import { MotionGate } from './motionGate.js';
+import { debugLogger } from '../utils/debugLogger.js';
+
 export class DetectionManager {
     constructor() {
         this.model = null;
@@ -7,6 +10,23 @@ export class DetectionManager {
         this.ctx = null;
         this.isDetecting = false;
         this.onDetection = null; // 콜백 함수
+
+        // 1단계(모션 게이트)
+        this.motionGate = null;
+        this.motionGateEnabled = true; // Phase 1 실측 비교용 런타임 토글
+
+        // 2단계(COCO-SSD) 스케줄링
+        // 안전 원칙: 기본 주기는 절대 생략하지 않는다. 모션 게이트는 오직
+        // 이 주기를 "앞당기는" 용도로만 쓴다 (브리프 §3.1).
+        this.stage2BaseIntervalMs = 300; // 기본 주기 — 실측 후 조정 필요
+        this.stage2MinGapOnLoomingMs = 80; // looming 시에도 프레임마다 재요청 방지
+        this.lastStage2Time = 0;
+        this._stage2Running = false;
+
+        // 실측용 카운터 (배터리/프레임레이트 비교)
+        this._perfStage1Count = 0;
+        this._perfStage2Count = 0;
+        this._perfWindowStart = 0;
 
         // 위험 객체 정의
         this.threatLevels = {
@@ -44,6 +64,9 @@ export class DetectionManager {
         // 카메라 스트림 설정
         await this.setupCamera();
 
+        // 1단계(모션 게이트) 준비
+        this.motionGate = new MotionGate(this.video);
+
         // COCO-SSD 모델 로드
         console.log('AI 모델 로딩 중...');
         this.model = await cocoSsd.load();
@@ -78,7 +101,10 @@ export class DetectionManager {
 
     async start() {
         this.isDetecting = true;
-        this.detectFrame();
+        this.lastStage2Time = 0;
+        this._perfWindowStart = performance.now();
+        this.motionGate?.reset();
+        this.loop();
     }
 
     stop() {
@@ -98,21 +124,60 @@ export class DetectionManager {
         }
     }
 
-    async detectFrame() {
+    // 항상 켜져 있는 루프: 1단계(모션 게이트)는 매 프레임 실행,
+    // 2단계(COCO-SSD)는 조건이 맞을 때만 별도로 트리거한다.
+    loop() {
         if (!this.isDetecting) return;
+        this.tick();
+        requestAnimationFrame(() => this.loop());
+    }
 
+    tick() {
+        const now = performance.now();
+        this._perfStage1Count++;
+
+        // 1단계: class-agnostic 확대율(looming) 계산 — 저비용, 매 프레임
+        const gate = this.motionGateEnabled
+            ? this.motionGate.update()
+            : { looming: false, urgency: 0, tau: Infinity };
+
+        // 2단계 실행 여부 결정.
+        // dueByBaseInterval: 기본 주기 — 모션 게이트와 무관하게 항상 보장됨(안전 원칙).
+        // dueByLooming: 1단계가 급격한 확대를 감지했을 때만 주기를 앞당김. 이 조건은
+        // 절대로 dueByBaseInterval을 늦추거나 생략시키는 방향으로 쓰이지 않는다.
+        const elapsedSinceStage2 = now - this.lastStage2Time;
+        const dueByBaseInterval = elapsedSinceStage2 >= this.stage2BaseIntervalMs;
+        const dueByLooming = gate.looming && elapsedSinceStage2 >= this.stage2MinGapOnLoomingMs;
+
+        if ((dueByBaseInterval || dueByLooming) && !this._stage2Running) {
+            this.lastStage2Time = now;
+            this._perfStage2Count++;
+            this._stage2Running = true;
+            this.runStage2(gate).finally(() => {
+                this._stage2Running = false;
+            });
+        }
+
+        this.reportPerf(now);
+    }
+
+    // 2단계: COCO-SSD 분류 + 기존 위협도 로직(그대로 재사용)
+    async runStage2(gate) {
         try {
-            // 객체 탐지 실행
             const predictions = await this.model.detect(this.video);
 
             // 캔버스 클리어
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-            // 위협 분석
+            // 위협 분석 (기존 로직 재사용)
             const threats = this.analyzeThreats(predictions);
 
             // 시각화
             this.visualizePredictions(predictions, threats);
+
+            if (gate.looming) {
+                debugLogger.log(`[모션게이트] looming으로 조기 검사 (tau=${gate.tau.toFixed(2)}s, urgency=${gate.urgency.toFixed(2)})`);
+            }
 
             // 콜백 호출
             if (this.onDetection && threats.length > 0) {
@@ -122,9 +187,26 @@ export class DetectionManager {
         } catch (error) {
             console.error('탐지 오류:', error);
         }
+    }
 
-        // 다음 프레임
-        requestAnimationFrame(() => this.detectFrame());
+    // Phase 1 실측 비교용: 모션 게이트 on/off 런타임 토글
+    toggleMotionGate() {
+        this.motionGateEnabled = !this.motionGateEnabled;
+        debugLogger.log(`[모션게이트] ${this.motionGateEnabled ? 'ON' : 'OFF'}으로 전환`);
+        return this.motionGateEnabled;
+    }
+
+    reportPerf(now) {
+        if (now - this._perfWindowStart < 2000) return;
+
+        const seconds = (now - this._perfWindowStart) / 1000;
+        const stage1Fps = (this._perfStage1Count / seconds).toFixed(1);
+        const stage2Rate = (this._perfStage2Count / seconds).toFixed(2);
+        debugLogger.log(`[성능] stage1=${stage1Fps}fps, stage2=${stage2Rate}회/s, 게이트=${this.motionGateEnabled ? 'ON' : 'OFF'}`);
+
+        this._perfStage1Count = 0;
+        this._perfStage2Count = 0;
+        this._perfWindowStart = now;
     }
 
     analyzeThreats(predictions) {

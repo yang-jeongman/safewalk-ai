@@ -7,6 +7,7 @@ const urlsToCache = [
     './src/ui/styles.css',
     './src/core/app.js',
     './src/detection/detectionManager.js',
+    './src/detection/motionGate.js',
     './src/warning/warningSystem.js',
     './src/ui/uiController.js',
     './src/utils/dataManager.js',
