@@ -151,12 +151,15 @@ export class WarningSystem {
     unlock() {
         const utterance = new SpeechSynthesisUtterance(' ');
         utterance.volume = 0;
+        this._unlockUtterance = utterance;
         this.synth.speak(utterance);
     }
 
     speak(text, rate = 1, pitch = 1) {
         // 이전 음성 중지
-        this.synth.cancel();
+        if (this.synth.speaking || this.synth.pending) {
+            this.synth.cancel();
+        }
 
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.voice = this.voice;
@@ -164,6 +167,10 @@ export class WarningSystem {
         utterance.pitch = pitch;
         utterance.volume = 1;
 
+        // iOS Safari는 지역 변수만 참조된 SpeechSynthesisUtterance를
+        // 재생 전에 GC로 수거해버리는 버그가 있다(에러 없이 조용히 무음).
+        // 인스턴스에 참조를 유지해 GC 대상에서 제외한다.
+        this._utterance = utterance;
         this.synth.speak(utterance);
     }
 
