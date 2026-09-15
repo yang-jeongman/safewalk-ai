@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SafeWalk AI - 안전 보행 가이드</title>
+
+    <!-- PWA 메타 태그 -->
+    <meta name="theme-color" content="#000000">
+    <meta name="description" content="AI 기반 실시간 보행 안전 가이드 서비스">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="public/assets/icons/icon-192.png">
+
+    <!-- 스타일 -->
+    <link rel="stylesheet" href="src/ui/styles.css">
+</head>
+<body>
+    <!-- 스플래시 화면 -->
+    <div id="splash" class="screen active">
+        <div class="splash-content">
+            <h1 class="logo">🚶 SafeWalk AI</h1>
+            <p class="tagline">안전한 스마트폰 보행의 시작</p>
+            <div class="loading-spinner"></div>
+        </div>
+    </div>
+
+    <!-- 메인 화면 -->
+    <div id="main" class="screen">
+        <header class="app-header">
+            <h1 class="app-title">SafeWalk</h1>
+            <div class="header-actions">
+                <button id="btnSettings" class="icon-btn" aria-label="설정">⚙️</button>
+                <button id="btnInfo" class="icon-btn" aria-label="정보">ℹ️</button>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- 상태 표시 -->
+            <div class="status-card">
+                <div class="status-indicator" id="statusIndicator">
+                    <span class="status-icon">🟢</span>
+                    <span class="status-text">안전 모드 대기중</span>
+                </div>
+                <div class="safety-score">
+                    <span class="score-label">오늘의 안전 점수</span>
+                    <span class="score-value" id="safetyScore">--</span>
+                </div>
+            </div>
+
+            <!-- 시작 버튼 -->
+            <button id="btnStart" class="btn-primary btn-large">
+                <span class="btn-icon">🚶</span>
+                <span class="btn-text">안전 보행 시작</span>
+            </button>
+
+            <!-- 빠른 정보 -->
+            <div class="info-grid">
+                <div class="info-card">
+                    <span class="info-icon">⏱️</span>
+                    <span class="info-label">보행 시간</span>
+                    <span class="info-value" id="walkTime">0분</span>
+                </div>
+                <div class="info-card">
+                    <span class="info-icon">⚠️</span>
+                    <span class="info-label">위험 감지</span>
+                    <span class="info-value" id="dangerCount">0회</span>
+                </div>
+            </div>
+        </main>
+
+        <!-- 하단 네비게이션 -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-screen="main">
+                <span class="nav-icon">🏠</span>
+                <span class="nav-label">홈</span>
+            </button>
+            <button class="nav-item" data-screen="report">
+                <span class="nav-icon">📊</span>
+                <span class="nav-label">리포트</span>
+            </button>
+            <button class="nav-item emergency" id="btnEmergency">
+                <span class="nav-icon">🚨</span>
+                <span class="nav-label">긴급</span>
+            </button>
+            <button class="nav-item" data-screen="profile">
+                <span class="nav-icon">👤</span>
+                <span class="nav-label">프로필</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- 보행 모드 화면 -->
+    <div id="walking" class="screen">
+        <div class="walking-header">
+            <button id="btnStop" class="btn-stop">정지</button>
+            <div class="walking-status">
+                <span id="walkingTime">00:00</span>
+                <span class="walking-indicator">● 감지중</span>
+            </div>
+        </div>
+
+        <!-- 카메라 뷰 -->
+        <video id="videoElement" autoplay muted playsinline></video>
+        <canvas id="canvasOverlay"></canvas>
+
+        <!-- 위험 알림 영역 -->
+        <div id="alertZone" class="alert-zone"></div>
+
+        <!-- 하단 정보 -->
+        <div class="walking-info">
+            <div class="danger-level" id="dangerLevel">
+                <span class="level-text">안전</span>
+                <div class="level-bar">
+                    <div class="level-fill" style="width: 20%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 설정 화면 -->
+    <div id="settings" class="screen">
+        <header class="screen-header">
+            <button class="btn-back" data-back="main">←</button>
+            <h2>설정</h2>
+        </header>
+
+        <div class="settings-content">
+            <div class="setting-group">
+                <h3>경고 설정</h3>
+                <label class="setting-item">
+                    <span>음성 경고</span>
+                    <input type="checkbox" id="voiceAlert" checked>
+                </label>
+                <label class="setting-item">
+                    <span>진동 경고</span>
+                    <input type="checkbox" id="vibrationAlert" checked>
+                </label>
+                <label class="setting-item">
+                    <span>민감도</span>
+                    <select id="sensitivity">
+                        <option value="low">낮음</option>
+                        <option value="medium" selected>보통</option>
+                        <option value="high">높음</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- 스크립트 -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="src/core/app.js" type="module"></script>
+</body>
+</html>
