@@ -24,7 +24,11 @@ export class MotionGate {
 
         this.diffThreshold = options.diffThreshold ?? 18; // 0-255 그레이스케일 차분 임계값
         this.historyWindowMs = options.historyWindowMs ?? 600; // 확대율 계산용 시간창
-        this.minAreaRatio = options.minAreaRatio ?? 0.02; // 이보다 작은 움직임은 노이즈로 무시
+        this.minAreaRatio = options.minAreaRatio ?? 0.05; // 이보다 작은 움직임은 노이즈로 무시
+        // 실기기 실측(iOS, 2026-09-15)에서 상대 증가율(dArea/area)만으로는 기준선이
+        // 낮을 때 카메라 노이즈만으로도 "2배 증가"처럼 읽혀 tau가 거의 항상 낮게
+        // 나오는 문제가 확인됨. 절대 증가폭 최소치를 추가로 요구해 억제한다.
+        this.minAbsoluteGrowth = options.minAbsoluteGrowth ?? 0.03; // 시간창 동안 최소 이만큼 늘어야 함
         this.urgentTau = options.urgentTau ?? 1.0; // 초 단위 — 이보다 작으면 "임박"으로 판단
         this.requiredStreak = options.requiredStreak ?? 2; // 연속 몇 회 충족해야 looming 확정
 
@@ -114,7 +118,9 @@ export class MotionGate {
         const dt = (now - oldest.t) / 1000; // 초
         const dArea = motionRatio - oldest.area;
 
-        if (dt <= 0 || dArea <= 0) {
+        // 절대 증가폭이 충분하지 않으면(=노이즈 수준) looming 후보에서 제외.
+        // 기준선이 작을 때 상대 증가율만으로 판단하면 노이즈에도 쉽게 흔들린다.
+        if (dt <= 0 || dArea < this.minAbsoluteGrowth) {
             return { rawLooming: false, looming: false, urgency: 0, motionRatio, tau: Infinity };
         }
 
