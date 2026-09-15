@@ -146,6 +146,14 @@ export class WarningSystem {
         }
     }
 
+    // iOS Safari는 사용자 제스처와 동기적으로 연결되지 않은 speak() 호출을
+    // 조용히 무시한다. 버튼 클릭 핸들러 안에서 먼저 호출해 음성 합성을 깨워둔다.
+    unlock() {
+        const utterance = new SpeechSynthesisUtterance(' ');
+        utterance.volume = 0;
+        this.synth.speak(utterance);
+    }
+
     speak(text, rate = 1, pitch = 1) {
         // 이전 음성 중지
         this.synth.cancel();

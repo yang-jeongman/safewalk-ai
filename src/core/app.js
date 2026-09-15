@@ -47,7 +47,12 @@ class SafeWalkApp {
 
     bindEvents() {
         // 시작/정지 버튼
-        document.getElementById('btnStart').addEventListener('click', () => this.startWalking());
+        document.getElementById('btnStart').addEventListener('click', () => {
+            // 클릭(사용자 제스처)과 동기적으로 호출해야 iOS Safari에서 이후의
+            // 비동기 speak() 호출이 무시되지 않는다.
+            this.warningSystem.unlock();
+            this.startWalking();
+        });
         document.getElementById('btnStop').addEventListener('click', () => this.stopWalking());
 
         // 긴급 버튼
