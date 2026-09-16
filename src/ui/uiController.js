@@ -212,6 +212,19 @@ export class UIController {
             }
         }
 
+        // 이모지 투명도 (감지 결과를 원본 영상 대신 이모지로만 표시)
+        const emojiOpacity = document.getElementById('emojiOpacity');
+        if (emojiOpacity) {
+            emojiOpacity.addEventListener('input', (e) => {
+                localStorage.setItem('emojiOpacity', e.target.value);
+            });
+
+            const saved = localStorage.getItem('emojiOpacity');
+            if (saved) {
+                emojiOpacity.value = saved;
+            }
+        }
+
         // 미지 객체 학습 참여 (Phase 2 open-set 인식, 기본값 OFF)
         const unknownObjectContribution = document.getElementById('unknownObjectContribution');
         if (unknownObjectContribution) {

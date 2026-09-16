@@ -413,6 +413,16 @@ export class DetectionManager {
         return Math.min(distance, 50); // 최대 50m
     }
 
+    // 실제 객체(바운딩박스/원본 영상 크롭)를 그대로 보여주지 않고 이모지로만
+    // 표현한다 — 제품 방향(§ AI_개발위임_브리프.md 대화 결정사항). 투명도는
+    // 설정 화면의 슬라이더(emojiOpacity, localStorage)로 사용자가 조절한다.
+    getEmojiOpacity() {
+        const raw = localStorage.getItem('emojiOpacity');
+        const val = raw === null ? NaN : parseInt(raw, 10);
+        if (Number.isNaN(val)) return 0.85;
+        return Math.min(1, Math.max(0.1, val / 100));
+    }
+
     visualizePredictions(predictions, threats) {
         // 위협 맵 생성 (빠른 조회용)
         const threatMap = new Map();
@@ -421,12 +431,13 @@ export class DetectionManager {
             threatMap.set(key, t);
         });
 
+        const opacity = this.getEmojiOpacity();
+
         predictions.forEach(pred => {
             const [x, y, width, height] = pred.bbox;
             const key = `${pred.class}-${pred.bbox.join(',')}`;
             const threat = threatMap.get(key);
 
-            // 아이콘 선택
             const icon = this.iconMap[pred.class] || '❓';
 
             // 위험도에 따른 색상
@@ -436,41 +447,48 @@ export class DetectionManager {
                 else if (threat.level > 0.4) color = '#ff9800'; // 주황 (주의)
             }
 
-            // 바운딩 박스 그리기
-            this.ctx.strokeStyle = color;
-            this.ctx.lineWidth = 3;
-            this.ctx.strokeRect(x, y, width, height);
+            const centerX = x + width / 2;
+            const centerY = y + height / 2;
 
-            // 배경 박스
+            // 객체(바운딩박스)가 클수록(=가까울수록) 이모지도 크게 — 거리를
+            // 직관적으로 느끼게 하는 신호
+            const fontSize = Math.min(140, Math.max(28, height * 0.55));
+            const radius = fontSize * 0.65;
+
+            // 위협도 색상 글로우 — 박스 대신 은은한 원으로 위험도만 표시
+            this.ctx.save();
+            this.ctx.globalAlpha = opacity * 0.35;
             this.ctx.fillStyle = color;
-            this.ctx.globalAlpha = 0.2;
-            this.ctx.fillRect(x, y, width, height);
-            this.ctx.globalAlpha = 1;
+            this.ctx.beginPath();
+            this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            this.ctx.fill();
+            this.ctx.restore();
 
-            // 라벨 배경
-            const label = `${icon} ${pred.class}`;
-            const labelWidth = this.ctx.measureText(label).width + 20;
-            this.ctx.fillStyle = color;
-            this.ctx.fillRect(x, y - 30, labelWidth, 30);
-
-            // 라벨 텍스트
-            this.ctx.fillStyle = 'white';
-            this.ctx.font = '16px Arial';
-            this.ctx.fillText(label, x + 10, y - 8);
+            // 이모지
+            this.ctx.save();
+            this.ctx.globalAlpha = opacity;
+            this.ctx.font = `${fontSize}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText(icon, centerX, centerY);
+            this.ctx.restore();
 
             // 거리 표시
             if (threat) {
-                const distText = `${threat.distance.toFixed(1)}m`;
+                this.ctx.save();
+                this.ctx.globalAlpha = opacity;
                 this.ctx.font = '14px Arial';
                 this.ctx.fillStyle = color;
-                this.ctx.fillText(distText, x + 10, y + height - 10);
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(`${threat.distance.toFixed(1)}m`, centerX, centerY + radius + 16);
+                this.ctx.restore();
             }
 
             // 방향 화살표
             if (threat && threat.direction && threat.direction !== '정면') {
-                const centerX = x + width / 2;
-                const centerY = y + height / 2;
-                this.drawDirectionArrow(centerX, centerY, threat.direction, color);
+                this.ctx.globalAlpha = opacity;
+                this.drawDirectionArrow(centerX, centerY - radius - 20, threat.direction, color);
+                this.ctx.globalAlpha = 1;
             }
         });
     }

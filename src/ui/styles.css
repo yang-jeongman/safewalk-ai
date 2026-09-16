@@ -486,6 +486,11 @@ body {
     padding-top: 4px;
 }
 
+.setting-item-slider input[type="range"] {
+    width: 140px;
+    accent-color: var(--primary);
+}
+
 /* 반응형 */
 @media (min-width: 768px) {
     .main-content {
