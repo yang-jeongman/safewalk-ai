@@ -89,6 +89,18 @@ export class UIController {
         }, 3000);
     }
 
+    // 신호등 색 전용 배너 문구 — warningSystem.generateMessage()의 음성 안내와
+    // 동일한 문구를 화면에도 보여준다. 해당 없으면 null.
+    describeTrafficLight(threat) {
+        if (threat.class !== 'traffic light' || !threat.trafficLightColor) return null;
+        const text = {
+            red: '빨간불, 건너지 마세요',
+            yellow: '노란불, 곧 바뀝니다',
+            green: '초록불, 건너도 안전합니다'
+        }[threat.trafficLightColor];
+        return text || null;
+    }
+
     showDanger(threat) {
         this.updateDangerLevel(threat.level);
 
@@ -96,12 +108,18 @@ export class UIController {
         const alertZone = document.getElementById('alertZone');
         if (!alertZone) return;
 
+        // 신호등은 색 전용 문구 사용 — warningSystem.generateMessage()의
+        // 음성 안내와 화면 배너가 다른 문구를 보여주지 않도록 맞춘다
+        const body = this.describeTrafficLight(threat) || `
+            ${threat.direction} ${threat.class}<br>
+            거리: ${threat.distance.toFixed(1)}m
+        `;
+
         const alert = document.createElement('div');
         alert.className = 'alert danger';
         alert.innerHTML = `
             <strong>⚠️ 위험!</strong><br>
-            ${threat.direction} ${threat.class}<br>
-            거리: ${threat.distance.toFixed(1)}m
+            ${body}
         `;
 
         alertZone.innerHTML = '';
@@ -123,11 +141,13 @@ export class UIController {
         const alertZone = document.getElementById('alertZone');
         if (!alertZone) return;
 
+        const body = this.describeTrafficLight(threat) || `${threat.direction} ${threat.class}`;
+
         const alert = document.createElement('div');
         alert.className = 'alert warning';
         alert.innerHTML = `
             <strong>주의</strong><br>
-            ${threat.direction} ${threat.class}
+            ${body}
         `;
 
         alertZone.innerHTML = '';
