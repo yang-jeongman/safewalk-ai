@@ -12,7 +12,8 @@ export class UIController {
             splash: document.getElementById('splash'),
             main: document.getElementById('main'),
             walking: document.getElementById('walking'),
-            settings: document.getElementById('settings')
+            settings: document.getElementById('settings'),
+            report: document.getElementById('report')
         };
 
         // 위험도 표시 요소
@@ -23,16 +24,22 @@ export class UIController {
     }
 
     switchScreen(screenName) {
+        // 아직 안 만들어진 화면(예: 프로필)으로 전환 시도하면 현재 화면을
+        // 그대로 두고 무시한다 — 예전엔 여기서 currentScreen을 먼저 숨겨버려서
+        // 목적지 화면이 없으면 빈 흰 화면만 남는 버그가 있었다.
+        if (!this.screens[screenName]) {
+            console.warn(`화면 "${screenName}"이(가) 아직 없습니다`);
+            return;
+        }
+
         // 현재 화면 숨기기
         if (this.screens[this.currentScreen]) {
             this.screens[this.currentScreen].classList.remove('active');
         }
 
         // 새 화면 표시
-        if (this.screens[screenName]) {
-            this.screens[screenName].classList.add('active');
-            this.currentScreen = screenName;
-        }
+        this.screens[screenName].classList.add('active');
+        this.currentScreen = screenName;
 
         // 네비게이션 업데이트
         this.updateNavigation(screenName);
@@ -274,6 +281,73 @@ export class UIController {
         const dangerCountElement = document.getElementById('dangerCount');
         if (dangerCountElement && stats.dangerCount !== undefined) {
             dangerCountElement.textContent = stats.dangerCount;
+        }
+    }
+
+    // 리포트 화면 렌더링 — dataManager.getStats()의 recentSessions(최근 7일)와
+    // analyzeDangerPatterns()의 결과를 화면에 채운다.
+    renderReport(stats, patterns) {
+        const sessions = stats.recentSessions || [];
+
+        const totalWalkTime = sessions.reduce((sum, s) => sum + (s.duration || 0), 0);
+        const totalDangers = sessions.reduce((sum, s) => sum + (s.dangerCount || 0), 0);
+        const avgScore = sessions.length > 0
+            ? Math.round(sessions.reduce((sum, s) => sum + (s.safetyScore || 0), 0) / sessions.length)
+            : null;
+
+        const walkTimeEl = document.getElementById('reportWalkTime');
+        if (walkTimeEl) walkTimeEl.textContent = `${Math.round(totalWalkTime / 60000)}분`;
+
+        const dangerCountEl = document.getElementById('reportDangerCount');
+        if (dangerCountEl) dangerCountEl.textContent = `${totalDangers}회`;
+
+        const avgScoreEl = document.getElementById('reportAvgScore');
+        if (avgScoreEl) avgScoreEl.textContent = avgScore !== null ? avgScore : '--';
+
+        // 최근 보행 기록 (최신순, 최대 10개)
+        const sessionListEl = document.getElementById('reportSessionList');
+        if (sessionListEl) {
+            const sorted = [...sessions].sort((a, b) => b.timestamp - a.timestamp).slice(0, 10);
+            if (sorted.length === 0) {
+                sessionListEl.innerHTML = '<p class="report-empty">아직 기록이 없습니다. 보행을 시작해보세요.</p>';
+            } else {
+                sessionListEl.innerHTML = sorted.map(s => {
+                    const date = new Date(s.timestamp);
+                    const dateStr = `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+                    const minutes = Math.round((s.duration || 0) / 60000);
+                    return `
+                        <div class="report-session-item">
+                            <span class="report-session-date">${dateStr}</span>
+                            <span>${minutes}분 · 위험 ${s.dangerCount || 0}회</span>
+                            <span>${s.safetyScore ?? '--'}점</span>
+                        </div>
+                    `;
+                }).join('');
+            }
+        }
+
+        // 자주 감지된 물체
+        const objListEl = document.getElementById('reportObjectFrequency');
+        if (objListEl) {
+            const objectNames = {
+                car: '자동차', bus: '버스', truck: '트럭', motorcycle: '오토바이',
+                bicycle: '자전거', person: '사람', 'traffic light': '신호등',
+                'stop sign': '정지 표지판', unknown: '정체불명의 물체'
+            };
+            const entries = Object.entries(patterns?.mostFrequentObject || {})
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 8);
+
+            if (entries.length === 0) {
+                objListEl.innerHTML = '<p class="report-empty">아직 기록이 없습니다.</p>';
+            } else {
+                objListEl.innerHTML = entries.map(([cls, count]) => `
+                    <div class="report-object-item">
+                        <span>${objectNames[cls] || cls}</span>
+                        <span>${count}회</span>
+                    </div>
+                `).join('');
+            }
         }
     }
 

@@ -118,6 +118,41 @@
         </div>
     </div>
 
+    <!-- 리포트 화면 -->
+    <div id="report" class="screen">
+        <header class="screen-header">
+            <button class="btn-back" data-back="main">←</button>
+            <h2>리포트</h2>
+        </header>
+
+        <div class="report-content">
+            <div class="report-summary">
+                <div class="report-stat">
+                    <span class="report-stat-value" id="reportWalkTime">0분</span>
+                    <span class="report-stat-label">최근 7일 보행시간</span>
+                </div>
+                <div class="report-stat">
+                    <span class="report-stat-value" id="reportDangerCount">0회</span>
+                    <span class="report-stat-label">최근 7일 위험감지</span>
+                </div>
+                <div class="report-stat">
+                    <span class="report-stat-value" id="reportAvgScore">--</span>
+                    <span class="report-stat-label">평균 안전점수</span>
+                </div>
+            </div>
+
+            <h3 class="report-section-title">최근 보행 기록</h3>
+            <div id="reportSessionList" class="report-session-list">
+                <p class="report-empty">아직 기록이 없습니다. 보행을 시작해보세요.</p>
+            </div>
+
+            <h3 class="report-section-title">자주 감지된 물체</h3>
+            <div id="reportObjectFrequency" class="report-object-list">
+                <p class="report-empty">아직 기록이 없습니다.</p>
+            </div>
+        </div>
+    </div>
+
     <!-- 설정 화면 -->
     <div id="settings" class="screen">
         <header class="screen-header">

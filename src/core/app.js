@@ -65,8 +65,11 @@ class SafeWalkApp {
 
         // 네비게이션
         document.querySelectorAll('.nav-item[data-screen]').forEach(btn => {
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', async (e) => {
                 const screen = e.currentTarget.dataset.screen;
+                if (screen === 'report') {
+                    await this.renderReport();
+                }
                 this.uiController.switchScreen(screen);
             });
         });
@@ -184,13 +187,35 @@ class SafeWalkApp {
             this.dangerCount++;
             this.warningSystem.alert(mostDangerous);
             this.uiController.showDanger(mostDangerous);
+            this.recordDangerEvent(mostDangerous);
         } else if (mostDangerous.level > 0.4) {
             this.warningSystem.warn(mostDangerous);
             this.uiController.showWarning(mostDangerous);
+            this.recordDangerEvent(mostDangerous);
         }
 
         // 위험도 UI 업데이트
         this.uiController.updateDangerLevel(mostDangerous.level);
+    }
+
+    // 리포트 화면의 "자주 감지된 물체" 통계용 — dataManager.saveDangerEvent()는
+    // 원래부터 있었지만 실제로 호출하는 곳이 없어 dangerEvents가 항상 비어있었다.
+    recordDangerEvent(threat) {
+        this.dataManager.saveDangerEvent({
+            sessionId: this.walkStartTime,
+            objectClass: threat.class,
+            threatLevel: threat.level,
+            distance: threat.distance,
+            direction: threat.direction
+        });
+    }
+
+    async renderReport() {
+        const [stats, patterns] = await Promise.all([
+            this.dataManager.getStats(),
+            this.dataManager.analyzeDangerPatterns()
+        ]);
+        this.uiController.renderReport(stats, patterns);
     }
 
     startWalkTimer() {
