@@ -120,7 +120,15 @@ export class WarningSystem {
     }
 
     generateMessage(threat, level) {
-        const { class: objClass, distance, direction } = threat;
+        const { class: objClass, distance, direction, trafficLightColor } = threat;
+
+        // 신호등은 원래 특허 구상대로 색에 따라 전용 안내 문구를 쓴다
+        // ("빨간불 경고 / 초록불 안내") — 거리/방향 기반 일반 문구 대신
+        if (objClass === 'traffic light' && trafficLightColor) {
+            if (trafficLightColor === 'red') return '빨간불, 건너지 마세요';
+            if (trafficLightColor === 'yellow') return '노란불, 곧 바뀝니다';
+            if (trafficLightColor === 'green') return '초록불, 건너도 안전합니다';
+        }
 
         // 객체명 한글 변환
         const objectNames = {

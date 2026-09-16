@@ -10,6 +10,7 @@ const urlsToCache = [
     './src/detection/motionGate.js',
     './src/detection/objectEmbedding.js',
     './src/detection/knownObjectGallery.js',
+    './src/detection/trafficLightColor.js',
     './src/warning/warningSystem.js',
     './src/ui/uiController.js',
     './src/utils/dataManager.js',

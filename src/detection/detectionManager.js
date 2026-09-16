@@ -2,6 +2,7 @@
 import { MotionGate } from './motionGate.js';
 import { ObjectEmbedding } from './objectEmbedding.js';
 import { KnownObjectGallery } from './knownObjectGallery.js';
+import { classifyTrafficLightColor } from './trafficLightColor.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 export class DetectionManager {
@@ -223,6 +224,9 @@ export class DetectionManager {
                 predictions = await this.resolveOpenSet(predictions);
             }
 
+            // 신호등 색 판정 (원래 특허 구상의 "빨간불 경고/초록불 안내")
+            this.classifyTrafficLights(predictions);
+
             // 캔버스 클리어
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
@@ -276,6 +280,39 @@ export class DetectionManager {
         }
 
         return predictions;
+    }
+
+    // 신호등 색 판정 — COCO-SSD가 'traffic light'로 찾은 박스마다 크롭해서
+    // 켜진 램프 색을 분석한다. 임베딩 모델 없이 픽셀 분석만 쓰므로 매우 저비용,
+    // 사이클당 개수 제한 없이 매번 돌려도 부담이 적다.
+    classifyTrafficLights(predictions) {
+        predictions.forEach((pred) => {
+            if (pred.class !== 'traffic light') return;
+
+            try {
+                const canvas = this.cropForColorAnalysis(pred.bbox);
+                const ctx = canvas.getContext('2d');
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const { color, confidence } = classifyTrafficLightColor(imageData);
+                pred.trafficLightColor = color;
+                pred.trafficLightConfidence = confidence;
+            } catch (err) {
+                pred.trafficLightColor = null;
+            }
+        });
+    }
+
+    cropForColorAnalysis(bbox) {
+        const [x, y, w, h] = bbox;
+        if (!this._trafficLightCanvas) {
+            this._trafficLightCanvas = document.createElement('canvas');
+        }
+        const size = 48;
+        this._trafficLightCanvas.width = size;
+        this._trafficLightCanvas.height = size;
+        const ctx = this._trafficLightCanvas.getContext('2d');
+        ctx.drawImage(this.video, x, y, Math.max(1, w), Math.max(1, h), 0, 0, size, size);
+        return this._trafficLightCanvas;
     }
 
     // 비디오의 bbox 영역을 정사각형으로 크롭 (임베딩 입력용 + 라벨링 큐 업로드용 공용)
@@ -368,7 +405,12 @@ export class DetectionManager {
             else direction = '정면';
 
             // 종합 위험도 계산
-            const baseThreat = this.threatLevels[pred.class] || 0.1;
+            let baseThreat = this.threatLevels[pred.class] || 0.1;
+            // 신호등은 색에 따라 위험도가 완전히 달라진다 — 빨간불(건너면 위험) vs
+            // 초록불(안내용, 저위험). 원래 특허 구상의 "빨간불 경고/초록불 안내" 반영.
+            if (pred.class === 'traffic light' && pred.trafficLightColor) {
+                baseThreat = { red: 0.75, yellow: 0.45, green: 0.15 }[pred.trafficLightColor] ?? baseThreat;
+            }
             const distanceThreat = Math.max(0, 1 - (distance / 10));
             const threatLevel =
                 (baseThreat * 0.4) +
@@ -382,7 +424,8 @@ export class DetectionManager {
                 distance: distance,
                 direction: direction,
                 bbox: pred.bbox,
-                confidence: pred.score
+                confidence: pred.score,
+                trafficLightColor: pred.trafficLightColor || null
             });
         });
 
@@ -438,7 +481,11 @@ export class DetectionManager {
             const key = `${pred.class}-${pred.bbox.join(',')}`;
             const threat = threatMap.get(key);
 
-            const icon = this.iconMap[pred.class] || '❓';
+            let icon = this.iconMap[pred.class] || '❓';
+            // 신호등은 실제 켜진 색을 그대로 이모지로 표현 (판정 못 하면 기본 🚦 유지)
+            if (pred.class === 'traffic light' && pred.trafficLightColor) {
+                icon = { red: '🔴', yellow: '🟡', green: '🟢' }[pred.trafficLightColor] || icon;
+            }
 
             // 위험도에 따른 색상
             let color = '#4CAF50'; // 녹색 (안전)
