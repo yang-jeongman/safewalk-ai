@@ -4,6 +4,7 @@ import { WarningSystem } from '../warning/warningSystem.js';
 import { UIController } from '../ui/uiController.js';
 import { DataManager } from '../utils/dataManager.js';
 import { debugLogger } from '../utils/debugLogger.js';
+import { exportUnknownObjectQueue } from '../utils/unknownObjectExporter.js';
 
 class SafeWalkApp {
     constructor() {
@@ -85,6 +86,12 @@ class SafeWalkApp {
                 return;
             }
             this.detectionManager.toggleMotionGate();
+        });
+        document.getElementById('btnDebugExport').addEventListener('click', () => {
+            const { count } = exportUnknownObjectQueue();
+            debugLogger.log(count > 0
+                ? `[오픈셋] 미지 객체 ${count}개를 ZIP으로 내보냈습니다`
+                : '[오픈셋] 내보낼 미지 객체가 없습니다 (큐가 비어있음)');
         });
 
         // 뒤로 가기 버튼

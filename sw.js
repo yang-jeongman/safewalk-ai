@@ -14,6 +14,7 @@ const urlsToCache = [
     './src/ui/uiController.js',
     './src/utils/dataManager.js',
     './src/utils/debugLogger.js',
+    './src/utils/unknownObjectExporter.js',
     './data/known-objects-gallery.json',
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0',
     'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',

@@ -293,9 +293,10 @@ export class DetectionManager {
 
     // 미지 객체 라벨링 큐 (docs/phase2-design.md §등록 경로).
     // 기본값 OFF, 사용자가 설정에서 명시적으로 옵트인해야 동작한다.
-    // TODO: 실제 서버 업로드 트랜스포트 미구현 — 업로드 프록시(Cloudflare Worker 등)
-    // 인프라를 사용자와 함께 결정한 뒤 이 자리에서 실제 전송을 구현한다. 지금은
-    // 로컬 큐에만 쌓아 파이프라인을 확인할 수 있게 해둔다.
+    // 자동 서버 업로드는 의도적으로 만들지 않는다 — 공개 레포 JS에 쓰기 토큰을
+    // 넣으면 누구나 추출해 악용할 수 있어서다. 대신 로컬 큐에 쌓아두고, 디버그
+    // 패널의 "미지 객체 내보내기"로 ZIP 다운로드 → 사용자가 GitHub Issue에
+    // 수동으로 첨부하는 흐름을 쓴다 (src/utils/unknownObjectExporter.js).
     maybeQueueForLabeling(cropCanvas, pred) {
         const optedIn = localStorage.getItem('unknownObjectContribution') === 'true';
         if (!optedIn) return;
@@ -311,7 +312,7 @@ export class DetectionManager {
             });
             while (queue.length > 20) queue.shift(); // 로컬 큐 크기 제한
             localStorage.setItem('unknownObjectQueue', JSON.stringify(queue));
-            debugLogger.log(`[오픈셋] 미지 객체 로컬 큐 저장 (${queue.length}개 대기, 업로드 전송은 미구현)`);
+            debugLogger.log(`[오픈셋] 미지 객체 로컬 큐 저장 (${queue.length}개 대기, 디버그 패널에서 내보내기 가능)`);
         } catch (err) {
             debugLogger.log(`[오픈셋] 큐 저장 실패: ${err}`);
         }
