@@ -60,7 +60,10 @@ export class DetectionManager {
             'stop sign': 0.4,
             // 미지 객체는 절대 "안전"으로 취급하지 않는다 — 사람과 동급 기본 위협도
             // (브리프 §3.2 안전 원칙: 미지 = 저위험이 아니라 "정체불명의 물체"로 중간 위협도)
-            'unknown': 0.5
+            'unknown': 0.5,
+            // 벽/기둥/전봇대 등 COCO-SSD가 아예 모르는 정면 장애물 — 모션게이트가
+            // 합성한 항목. 실제로 부딪힐 수 있는 물리적 장애물이라 차량급으로 취급.
+            'obstacle': 0.7
         };
 
         // 아이콘 매핑
@@ -72,7 +75,8 @@ export class DetectionManager {
             'bicycle': '🚲',
             'motorcycle': '🏍️',
             'traffic light': '🚦',
-            'stop sign': '🛑'
+            'stop sign': '🛑',
+            'obstacle': '🧱'
         };
     }
 
@@ -227,6 +231,23 @@ export class DetectionManager {
             // 신호등 색 판정 (원래 특허 구상의 "빨간불 경고/초록불 안내")
             this.classifyTrafficLights(predictions);
 
+            // 일반 장애물 폴백 — 벽/기둥/전봇대처럼 COCO-SSD가 애초에 모르는
+            // 물체는 박스 자체가 안 생겨서 모션게이트가 확대를 감지해도 경고로
+            // 이어지지 못하는 실제 안전 공백이 있었다. 모션게이트가 확대를
+            // 감지했는데 그 위치를 설명하는 COCO-SSD 박스가 하나도 없으면,
+            // 모션게이트 자신이 감지한 영역을 "장애물"로 합성해 넣는다.
+            if (gate.looming && gate.hotRegionBbox) {
+                const explained = predictions.some((p) => this.bboxOverlaps(p.bbox, gate.hotRegionBbox));
+                if (!explained) {
+                    predictions.push({
+                        class: 'obstacle',
+                        score: Math.max(0.5, gate.urgency),
+                        bbox: gate.hotRegionBbox
+                    });
+                    debugLogger.log(`[모션게이트] COCO-SSD가 못 잡은 정면 장애물 감지 (urgency=${gate.urgency.toFixed(2)})`);
+                }
+            }
+
             // 캔버스 클리어
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
@@ -280,6 +301,13 @@ export class DetectionManager {
         }
 
         return predictions;
+    }
+
+    // 두 bbox([x,y,w,h])가 겹치는지 (단순 AABB 교차 판정)
+    bboxOverlaps(a, b) {
+        const [ax, ay, aw, ah] = a;
+        const [bx, by, bw, bh] = b;
+        return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
     }
 
     // 신호등 색 판정 — COCO-SSD가 'traffic light'로 찾은 박스마다 크롭해서

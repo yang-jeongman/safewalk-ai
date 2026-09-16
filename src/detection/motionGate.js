@@ -69,6 +69,7 @@ export class MotionGate {
 
         let centerMotionCells = 0;
         let centerCellCount = 0;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         if (this.prevGray) {
             for (let y = 0; y < this.gridHeight; y++) {
                 const inCenterRow = y >= this.centerY0 && y < this.centerY1;
@@ -78,6 +79,10 @@ export class MotionGate {
                     centerCellCount++;
                     if (Math.abs(gray[i] - this.prevGray[i]) > this.diffThreshold) {
                         centerMotionCells++;
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
                     }
                 }
             }
@@ -91,11 +96,25 @@ export class MotionGate {
             this.history.shift();
         }
 
-        return this.computeExpansion(motionRatio, now);
+        // 확대/움직임이 몰려있는 영역을 비디오 픽셀 좌표 bbox로 변환.
+        // COCO-SSD가 박스를 못 만드는 물체(벽/기둥 등)를 위한 "일반 장애물" 폴백용.
+        let hotRegionBbox = null;
+        if (centerMotionCells > 0 && this.video && this.video.videoWidth) {
+            const scaleX = this.video.videoWidth / this.gridWidth;
+            const scaleY = this.video.videoHeight / this.gridHeight;
+            hotRegionBbox = [
+                minX * scaleX,
+                minY * scaleY,
+                (maxX - minX + 1) * scaleX,
+                (maxY - minY + 1) * scaleY
+            ];
+        }
+
+        return this.computeExpansion(motionRatio, now, hotRegionBbox);
     }
 
-    computeExpansion(motionRatio, now) {
-        const result = this._rawExpansion(motionRatio, now);
+    computeExpansion(motionRatio, now, hotRegionBbox) {
+        const result = this._rawExpansion(motionRatio, now, hotRegionBbox);
 
         // 연속 requiredStreak회 충족해야 최종 looming으로 인정 (단일 샘플 노이즈 억제)
         if (result.rawLooming) {
@@ -104,14 +123,17 @@ export class MotionGate {
             this._loomingStreak = 0;
         }
         result.looming = this._loomingStreak >= this.requiredStreak;
-        if (!result.looming) result.urgency = 0;
+        if (!result.looming) {
+            result.urgency = 0;
+            result.hotRegionBbox = null;
+        }
 
         return result;
     }
 
-    _rawExpansion(motionRatio, now) {
+    _rawExpansion(motionRatio, now, hotRegionBbox) {
         if (this.history.length < 2 || motionRatio < this.minAreaRatio) {
-            return { rawLooming: false, looming: false, urgency: 0, motionRatio, tau: Infinity };
+            return { rawLooming: false, looming: false, urgency: 0, motionRatio, tau: Infinity, hotRegionBbox: null };
         }
 
         const oldest = this.history[0];
@@ -121,7 +143,7 @@ export class MotionGate {
         // 절대 증가폭이 충분하지 않으면(=노이즈 수준) looming 후보에서 제외.
         // 기준선이 작을 때 상대 증가율만으로 판단하면 노이즈에도 쉽게 흔들린다.
         if (dt <= 0 || dArea < this.minAbsoluteGrowth) {
-            return { rawLooming: false, looming: false, urgency: 0, motionRatio, tau: Infinity };
+            return { rawLooming: false, looming: false, urgency: 0, motionRatio, tau: Infinity, hotRegionBbox: null };
         }
 
         // tau ≈ area / (dArea/dt) — LPLC2가 근사하는 time-to-collision과 같은 형태(θ/θ')
@@ -131,7 +153,7 @@ export class MotionGate {
         const rawLooming = tau < this.urgentTau;
         const urgency = rawLooming ? Math.min(1, 1 - tau / this.urgentTau) : 0;
 
-        return { rawLooming, looming: rawLooming, urgency, motionRatio, tau };
+        return { rawLooming, looming: rawLooming, urgency, motionRatio, tau, hotRegionBbox };
     }
 
     reset() {
