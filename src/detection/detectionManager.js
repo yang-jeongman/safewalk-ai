@@ -1,5 +1,6 @@
 // 객체 탐지 관리 모듈
 import { MotionGate } from './motionGate.js';
+import { PoleGate } from './poleGate.js';
 import { ObjectEmbedding } from './objectEmbedding.js';
 import { KnownObjectGallery } from './knownObjectGallery.js';
 import { classifyTrafficLightColor } from './trafficLightColor.js';
@@ -24,6 +25,14 @@ export class DetectionManager {
         this.motionGateSampleIntervalMs = 60; // ~16Hz — stage2 기본 주기보다는 훨씬 촘촘함
         this._lastGateSampleTime = 0;
         this._lastGateResult = { looming: false, urgency: 0, tau: Infinity };
+
+        // 기둥 게이트 — 전봇대/기둥처럼 COCO-SSD가 모르는 수직 구조물을 접근 여부(looming)와
+        // 무관하게 항상 감지 (사용자 피드백 2026-09-17: "전봇대·기둥 인식률 낮음")
+        this.poleGate = null;
+        this.poleGateEnabled = true;
+        this.poleGateSampleIntervalMs = 150; // 모션게이트보다 그리드가 커서 조금 느슨한 주기
+        this._lastPoleSampleTime = 0;
+        this._lastPoleResult = { detected: false, bbox: null };
 
         // 2단계(COCO-SSD) 스케줄링
         // 안전 원칙: 기본 주기는 절대 생략하지 않는다. 모션 게이트는 오직
@@ -62,8 +71,13 @@ export class DetectionManager {
             // (브리프 §3.2 안전 원칙: 미지 = 저위험이 아니라 "정체불명의 물체"로 중간 위협도)
             'unknown': 0.5,
             // 벽/기둥/전봇대 등 COCO-SSD가 아예 모르는 정면 장애물 — 모션게이트가
-            // 합성한 항목. 실제로 부딪힐 수 있는 물리적 장애물이라 차량급으로 취급.
-            'obstacle': 0.7
+            // 급격한 접근(looming)을 감지했을 때 합성한 항목. 실제로 부딪힐 수 있는
+            // 물리적 장애물이라 차량급으로 취급.
+            'obstacle': 0.7,
+            // 전봇대/기둥 등 "길고 가는 수직 구조물" — 기둥게이트가 접근 여부와 무관하게
+            // 상시 감지(poleGate.js). 정밀 분류가 아닌 기하학적 추정이라 obstacle보다는
+            // 낮게, 사람과 비슷한 수준으로 취급.
+            'pole': 0.6
         };
 
         // 아이콘 매핑
@@ -76,7 +90,8 @@ export class DetectionManager {
             'motorcycle': '🏍️',
             'traffic light': '🚦',
             'stop sign': '🛑',
-            'obstacle': '🧱'
+            'obstacle': '🧱',
+            'pole': '🪧'
         };
     }
 
@@ -94,10 +109,25 @@ export class DetectionManager {
         // 1단계(모션 게이트) 준비
         this.motionGate = new MotionGate(this.video);
 
-        // COCO-SSD 모델 로드
+        // 기둥 게이트 준비 — 실패해도 나머지 탐지는 그대로 동작
+        if (this.poleGateEnabled) {
+            try {
+                this.poleGate = new PoleGate(this.video);
+            } catch (err) {
+                console.error('기둥 게이트 초기화 실패:', err);
+                this.poleGate = null;
+            }
+        }
+
+        // COCO-SSD 모델 로드.
+        // 기본값(lite_mobilenet_v2)은 가볍지만 작은/먼 물체(특히 신호등)를 잘 놓친다.
+        // 2026-09-17 사용자 요청("거리가 멀어도 신호등 인식") 대응으로 더 정확한
+        // mobilenet_v2 base로 전환 — 대신 모델이 더 무겁고 느리다. 실기기에서
+        // 프레임레이트 저하가 체감되면 아래 값을 'lite_mobilenet_v2'로 되돌릴 것.
         console.log('AI 모델 로딩 중...');
-        this.model = await cocoSsd.load();
-        console.log('AI 모델 로드 완료');
+        this.cocoSsdBase = 'mobilenet_v2';
+        this.model = await cocoSsd.load({ base: this.cocoSsdBase });
+        console.log(`AI 모델 로드 완료 (base=${this.cocoSsdBase})`);
 
         // Phase 2: open-set 인식 준비 — 실패해도 COCO-SSD 단독 동작은 막지 않는다
         if (this.openSetEnabled) {
@@ -151,6 +181,9 @@ export class DetectionManager {
         this._lastGateSampleTime = 0;
         this._lastGateResult = { looming: false, urgency: 0, tau: Infinity };
         this.motionGate?.reset();
+        this._lastPoleSampleTime = 0;
+        this._lastPoleResult = { detected: false, bbox: null };
+        this.poleGate?.reset();
         this.loop();
     }
 
@@ -196,6 +229,15 @@ export class DetectionManager {
             }
         } else {
             gate = { looming: false, urgency: 0, tau: Infinity };
+        }
+
+        // 기둥 게이트 샘플링 — motionGate와 별개 주기, looming과 무관하게 항상 시도.
+        // (전봇대/기둥은 접근 중이 아니라 스쳐 지나가거나 가만히 서 있어도 위험하다)
+        if (this.poleGateEnabled && this.poleGate) {
+            if (now - this._lastPoleSampleTime >= this.poleGateSampleIntervalMs) {
+                this._lastPoleResult = this.poleGate.update();
+                this._lastPoleSampleTime = now;
+            }
         }
 
         // 2단계 실행 여부 결정.
@@ -245,6 +287,21 @@ export class DetectionManager {
                         bbox: gate.hotRegionBbox
                     });
                     debugLogger.log(`[모션게이트] COCO-SSD가 못 잡은 정면 장애물 감지 (urgency=${gate.urgency.toFixed(2)})`);
+                }
+            }
+
+            // 기둥 게이트 — 전봇대/기둥 등 길고 가는 수직 구조물. looming(접근)과 무관하게
+            // 항상 확인하며, COCO-SSD가 이미 그 자리를 설명하고 있으면 중복 추가하지 않는다.
+            if (this._lastPoleResult.detected && this._lastPoleResult.bbox) {
+                const poleBbox = this._lastPoleResult.bbox;
+                const explained = predictions.some((p) => this.bboxOverlaps(p.bbox, poleBbox));
+                if (!explained) {
+                    predictions.push({
+                        class: 'pole',
+                        score: 0.55,
+                        bbox: poleBbox
+                    });
+                    debugLogger.log('[기둥게이트] 수직 구조물(전봇대/기둥 추정) 감지');
                 }
             }
 
@@ -321,7 +378,10 @@ export class DetectionManager {
                 const canvas = this.cropForColorAnalysis(pred.bbox);
                 const ctx = canvas.getContext('2d');
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const { color, confidence } = classifyTrafficLightColor(imageData);
+                // 원본(비디오상) bbox 픽셀 면적을 같이 넘겨서, 멀리 있어 원래도 작은
+                // 신호등은 판정 기준을 조금 더 관대하게 적용한다(§classifyTrafficLightColor).
+                const [, , bw, bh] = pred.bbox;
+                const { color, confidence } = classifyTrafficLightColor(imageData, { sourceArea: bw * bh });
                 pred.trafficLightColor = color;
                 pred.trafficLightConfidence = confidence;
             } catch (err) {
@@ -339,6 +399,10 @@ export class DetectionManager {
         this._trafficLightCanvas.width = size;
         this._trafficLightCanvas.height = size;
         const ctx = this._trafficLightCanvas.getContext('2d');
+        // 먼 신호등은 원본 bbox가 몇 픽셀 안 된다 — 기본(블러 보간) 스케일링은 그 몇 픽셀의
+        // 램프 색을 주변 검은 하우징과 섞어버려 색 판정을 어렵게 만든다. nearest-neighbor로
+        // 확대해 원래 색을 (뭉개지 않고) 블록 형태로라도 보존한다.
+        ctx.imageSmoothingEnabled = false;
         ctx.drawImage(this.video, x, y, Math.max(1, w), Math.max(1, h), 0, 0, size, size);
         return this._trafficLightCanvas;
     }
