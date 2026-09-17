@@ -1,6 +1,7 @@
 // 객체 탐지 관리 모듈
 import { MotionGate } from './motionGate.js';
 import { PoleGate } from './poleGate.js';
+import { ObjectTracker } from './objectTracker.js';
 import { ObjectEmbedding } from './objectEmbedding.js';
 import { KnownObjectGallery } from './knownObjectGallery.js';
 import { classifyTrafficLightColor } from './trafficLightColor.js';
@@ -34,6 +35,13 @@ export class DetectionManager {
         this.poleGateSampleIntervalMs = 150; // 모션게이트보다 그리드가 커서 조금 느슨한 주기
         this._lastPoleSampleTime = 0;
         this._lastPoleResult = { detected: false, bbox: null };
+
+        // 객체 추적 — 차량/오토바이/자전거 진행방향 화살표(사용자 요청 2026-09-19)용.
+        // 비디오 없이도 만들 수 있어 생성자에서 바로 초기화.
+        this.tracker = new ObjectTracker();
+        // 진행방향 화살표를 그릴 대상 클래스 — 정지 표지판/신호등처럼 안 움직이는
+        // 것들은 방향이 의미 없으므로 제외.
+        this.trackedClasses = new Set(['car', 'bus', 'truck', 'motorcycle', 'bicycle']);
 
         // 2단계(COCO-SSD) 스케줄링
         // 안전 원칙: 기본 주기는 절대 생략하지 않는다. 모션 게이트는 오직
@@ -192,6 +200,7 @@ export class DetectionManager {
         this._lastPoleSampleTime = 0;
         this._lastPoleResult = { detected: false, bbox: null };
         this.poleGate?.reset();
+        this.tracker.reset();
         this.loop();
     }
 
@@ -318,6 +327,11 @@ export class DetectionManager {
                     debugLogger.log('[기둥게이트] 수직 구조물(전봇대/기둥 추정) 감지');
                 }
             }
+
+            // 객체 추적 — 차량/오토바이/자전거 진행방향 화살표용 이동벡터 계산
+            // (§ObjectTracker). 매 사이클 독립적인 COCO-SSD 박스에 프레임 간
+            // 정체성을 붙여준다.
+            predictions = this.tracker.update(predictions);
 
             // 캔버스 클리어
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -542,7 +556,10 @@ export class DetectionManager {
                 direction: direction,
                 bbox: pred.bbox,
                 confidence: pred.score,
-                trafficLightColor: pred.trafficLightColor || null
+                trafficLightColor: pred.trafficLightColor || null,
+                // 진행방향 화살표용 (§ObjectTracker) — 차량/오토바이/자전거만 의미 있음
+                motionVector: pred.motionVector || null,
+                sizeChangeRate: pred.sizeChangeRate ?? null
             });
         });
 
@@ -583,6 +600,20 @@ export class DetectionManager {
         return Math.min(1, Math.max(0.1, val / 100));
     }
 
+    // 거리에 따른 투명도 배율. 가까우면(2m 이하) 1.0(선명), 멀면(20m 이상) 바닥값까지
+    // 점점 흐려진다 — 완전히 안 보이게는 하지 않는다("뭔가 있다"는 힌트는 유지).
+    // 사용자 요청(2026-09-19): "멀리 있을 때는 흐릿하게, 가까이 올수록 진하게".
+    getDistanceOpacityFactor(distance) {
+        if (distance === undefined || distance === null) return 1;
+        const near = 2;
+        const far = 20;
+        const floor = 0.2;
+        if (distance <= near) return 1;
+        if (distance >= far) return floor;
+        const t = (distance - near) / (far - near);
+        return 1 - t * (1 - floor);
+    }
+
     visualizePredictions(predictions, threats) {
         // 위협 맵 생성 (빠른 조회용)
         const threatMap = new Map();
@@ -591,7 +622,7 @@ export class DetectionManager {
             threatMap.set(key, t);
         });
 
-        const opacity = this.getEmojiOpacity();
+        const baseOpacity = this.getEmojiOpacity();
 
         predictions.forEach(pred => {
             const [x, y, width, height] = pred.bbox;
@@ -618,6 +649,9 @@ export class DetectionManager {
             // 직관적으로 느끼게 하는 신호
             const fontSize = Math.min(140, Math.max(28, height * 0.55));
             const radius = fontSize * 0.65;
+
+            // 이 물체까지의 거리로 투명도를 한 번 더 배율 조정
+            const opacity = baseOpacity * this.getDistanceOpacityFactor(threat?.distance);
 
             // 위협도 색상 글로우 — 박스 대신 은은한 원으로 위험도만 표시
             this.ctx.save();
@@ -648,8 +682,25 @@ export class DetectionManager {
                 this.ctx.restore();
             }
 
-            // 방향 화살표
-            if (threat && threat.direction && threat.direction !== '정면') {
+            // 진행방향 화살표 — 차량/오토바이/자전거는 실제 이동방향(추적된 벡터)을
+            // 보여준다(사용자 요청 2026-09-19). 다가오면 아래(나를 향해), 멀어지면
+            // 위(나에게서 멀어지는 방향)로, 좌우 이동은 그대로 반영. 추적 이력이
+            // 부족하거나(막 탐지됨) 거의 안 움직이면 일반 위치 화살표로 대체.
+            if (this.trackedClasses.has(pred.class) && threat?.motionVector) {
+                const { dx } = threat.motionVector;
+                const dy = threat.sizeChangeRate ?? 0;
+                const magnitude = Math.hypot(dx, dy);
+                if (magnitude > 15) { // px/s — 노이즈성 미세 흔들림 제외, 실측 후 조정 필요
+                    const angle = Math.atan2(dx, -dy);
+                    this.ctx.globalAlpha = opacity;
+                    this.drawTravelArrow(centerX, centerY - radius - 20, angle, color);
+                    this.ctx.globalAlpha = 1;
+                } else if (threat.direction && threat.direction !== '정면') {
+                    this.ctx.globalAlpha = opacity;
+                    this.drawDirectionArrow(centerX, centerY - radius - 20, threat.direction, color);
+                    this.ctx.globalAlpha = 1;
+                }
+            } else if (threat && threat.direction && threat.direction !== '정면') {
                 this.ctx.globalAlpha = opacity;
                 this.drawDirectionArrow(centerX, centerY - radius - 20, threat.direction, color);
                 this.ctx.globalAlpha = 1;
@@ -672,6 +723,24 @@ export class DetectionManager {
         this.ctx.rotate(rotation);
 
         // 화살표 그리기
+        this.ctx.fillStyle = color;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, -20);
+        this.ctx.lineTo(-10, -5);
+        this.ctx.lineTo(10, -5);
+        this.ctx.closePath();
+        this.ctx.fill();
+
+        this.ctx.restore();
+    }
+
+    // 진행방향 화살표 — drawDirectionArrow(4방향 고정)와 달리 임의 각도(라디안)로
+    // 회전한다. angle=0이 "위"를 가리키는 기준.
+    drawTravelArrow(x, y, angleRad, color) {
+        this.ctx.save();
+        this.ctx.translate(x, y);
+        this.ctx.rotate(angleRad);
+
         this.ctx.fillStyle = color;
         this.ctx.beginPath();
         this.ctx.moveTo(0, -20);
