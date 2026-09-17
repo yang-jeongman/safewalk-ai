@@ -20,12 +20,18 @@ export class PoleGate {
         this.gridWidth = options.gridWidth || 48;
         this.gridHeight = options.gridHeight || 32;
 
-        this.edgeThreshold = options.edgeThreshold ?? 22; // 그레이스케일 좌우 차분 임계값(0-255)
-        this.minRunRatio = options.minRunRatio ?? 0.55; // 화면 세로의 이 비율 이상 끊김없이 이어져야 후보
+        this.edgeThreshold = options.edgeThreshold ?? 28; // 그레이스케일 좌우 차분 임계값(0-255)
+        this.minRunRatio = options.minRunRatio ?? 0.7; // 화면 세로의 이 비율 이상 끊김없이 이어져야 후보
         this.maxGapCells = options.maxGapCells ?? 1; // 이 칸 이하의 끊김(전선 가림 등)은 이어진 것으로 인정
         this.centerRatioW = options.centerRatioW ?? 0.8; // 화면 맨 가장자리(주변시야)는 제외
-        this.requiredStreak = options.requiredStreak ?? 2; // 연속 몇 회 충족해야 확정(단일 프레임 노이즈 억제)
+        this.requiredStreak = options.requiredStreak ?? 5; // 연속 몇 회 충족해야 확정(단일 프레임 노이즈 억제)
+        // 실기기 실측(2026-09-18)에서 위험감지가 초당 ~1회씩 터지는 심각한 오탐이 확인됨.
+        // 원인: "매 프레임 어딘가에 후보가 있다"는 사실만으로 streak을 쌓아서, 매번 다른
+        // 문틀/나무줄기/그림자 경계를 이어 붙여 streak이 사실상 절대 0으로 안 돌아갔다.
+        // 같은 물체(=비슷한 x 위치)가 연속으로 잡혀야만 streak을 쌓도록 위치 연속성을 요구한다.
+        this.positionToleranceCells = options.positionToleranceCells ?? 2;
         this._streak = 0;
+        this._lastBestX = null;
 
         this.canvas = document.createElement('canvas');
         this.canvas.width = this.gridWidth;
@@ -94,8 +100,18 @@ export class PoleGate {
             }
         }
 
-        const rawDetected = !!best;
-        this._streak = rawDetected ? this._streak + 1 : 0;
+        // 이번 프레임 후보가 직전 프레임 후보와 비슷한 x 위치일 때만 같은 물체로
+        // 보고 streak을 잇는다. 위치가 크게 다르면(=다른 경계를 우연히 주움)
+        // streak을 1부터 다시 시작 — "아무 후보나 있으면 OK"였던 버그 수정.
+        if (best) {
+            const samePosition = this._lastBestX !== null &&
+                Math.abs(best.x - this._lastBestX) <= this.positionToleranceCells;
+            this._streak = samePosition ? this._streak + 1 : 1;
+            this._lastBestX = best.x;
+        } else {
+            this._streak = 0;
+            this._lastBestX = null;
+        }
         const detected = this._streak >= this.requiredStreak;
 
         let bbox = null;
@@ -118,5 +134,6 @@ export class PoleGate {
 
     reset() {
         this._streak = 0;
+        this._lastBestX = null;
     }
 }

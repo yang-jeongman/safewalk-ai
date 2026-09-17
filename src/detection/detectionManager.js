@@ -278,7 +278,13 @@ export class DetectionManager {
             // 이어지지 못하는 실제 안전 공백이 있었다. 모션게이트가 확대를
             // 감지했는데 그 위치를 설명하는 COCO-SSD 박스가 하나도 없으면,
             // 모션게이트 자신이 감지한 영역을 "장애물"로 합성해 넣는다.
-            if (gate.looming && gate.hotRegionBbox) {
+            //
+            // 실기기 실측(2026-09-18)에서 7일간 위험감지 3619회 중 obstacle이 1268회로
+            // 과도했음이 확인됨. gate.looming(2단계를 앞당기는 용도, 기준이 느슨해도
+            // 괜찮음 — 틀려도 COCO-SSD 한 번 더 도는 비용뿐)과 달리, 사용자에게 직접
+            // 경고를 노출하는 이 분기는 더 엄격한 기준(urgency)을 따로 둔다.
+            const obstacleUrgencyThreshold = 0.5;
+            if (gate.looming && gate.urgency >= obstacleUrgencyThreshold && gate.hotRegionBbox) {
                 const explained = predictions.some((p) => this.bboxOverlaps(p.bbox, gate.hotRegionBbox));
                 if (!explained) {
                     predictions.push({
