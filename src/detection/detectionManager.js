@@ -4,6 +4,7 @@ import { PoleGate } from './poleGate.js';
 import { ObjectEmbedding } from './objectEmbedding.js';
 import { KnownObjectGallery } from './knownObjectGallery.js';
 import { classifyTrafficLightColor } from './trafficLightColor.js';
+import { estimateSharpness } from './sharpness.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 export class DetectionManager {
@@ -56,6 +57,11 @@ export class DetectionManager {
         this.knownSimilarityThreshold = 0.7; // 실측 후 조정 필요
         this.maxEmbeddingChecksPerCycle = 2; // 사이클당 재확인 상한 (비용 제한)
         this._cropCanvas = null;
+        // 분산-오브-라플라시안(src/detection/sharpness.js) 임계값. 실제 사용자가 보내준
+        // 크롭 샘플로 캘리브레이션(2026-09-18): 블러 심한 것들은 4~40, 또렷한 것들은
+        // 439~1969로 큰 간격이 있어 그 사이인 100으로 설정. 표본이 적어 향후 데이터가
+        // 더 쌓이면 재조정 필요.
+        this.minCropSharpness = 100;
 
         // 위험 객체 정의
         this.threatLevels = {
@@ -67,6 +73,7 @@ export class DetectionManager {
             'person': 0.5,
             'traffic light': 0.4,
             'stop sign': 0.4,
+            'bench': 0.1, // 정적 시설물, 낮은 위협도 (open-set 갤러리에 첫 항목 추가됨)
             // 미지 객체는 절대 "안전"으로 취급하지 않는다 — 사람과 동급 기본 위협도
             // (브리프 §3.2 안전 원칙: 미지 = 저위험이 아니라 "정체불명의 물체"로 중간 위협도)
             'unknown': 0.5,
@@ -91,7 +98,8 @@ export class DetectionManager {
             'traffic light': '🚦',
             'stop sign': '🛑',
             'obstacle': '🧱',
-            'pole': '🪧'
+            'pole': '🪧',
+            'bench': '🪑'
         };
     }
 
@@ -437,6 +445,17 @@ export class DetectionManager {
         if (!optedIn) return;
 
         try {
+            // 실측(2026-09-16/18)에서 사용자가 보내준 ZIP 대부분이 보행 중 손떨림으로
+            // 블러가 심해 갤러리 확장용으로 못 쓸 정도였다. 흐린 크롭은 애초에 큐에
+            // 넣지 않는다 — 적게 쌓여도 쓸모 있는 게 낫다.
+            const ctx = cropCanvas.getContext('2d');
+            const imageData = ctx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
+            const sharpness = estimateSharpness(imageData);
+            if (sharpness < this.minCropSharpness) {
+                debugLogger.log(`[오픈셋] 크롭이 흐려서 큐에서 제외 (선명도=${sharpness.toFixed(0)})`);
+                return;
+            }
+
             const dataUrl = cropCanvas.toDataURL('image/jpeg', 0.6);
             const queue = JSON.parse(localStorage.getItem('unknownObjectQueue') || '[]');
             queue.push({

@@ -141,7 +141,9 @@ export class WarningSystem {
             'traffic light': '신호등',
             'stop sign': '정지 표지판',
             'unknown': '정체불명의 물체', // Phase 2 open-set 인식 결과
-            'obstacle': '장애물' // 벽/기둥 등 COCO-SSD가 모르는 정면 장애물 (모션게이트 합성)
+            'obstacle': '장애물', // 벽/기둥 등 COCO-SSD가 모르는 정면 장애물 (모션게이트 합성)
+            'pole': '기둥', // 전봇대/기둥 (기둥게이트 합성)
+            'bench': '벤치'
         };
 
         const objName = objectNames[objClass] || objClass;
