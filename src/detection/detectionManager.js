@@ -71,6 +71,18 @@ export class DetectionManager {
         // 더 쌓이면 재조정 필요.
         this.minCropSharpness = 100;
 
+        // 걷는 거리에서 현실적으로 등장할 수 있는 COCO-SSD 클래스만 그대로 신뢰한다.
+        // 실사용 리포트에서 "elephant", "remote"처럼 이 상황에 나올 수 없는 클래스가
+        // 확인됨(2026-09-17) — COCO-SSD가 confidence 0.6 이상으로 "자신 있게" 틀리면
+        // lowConfidenceThreshold 기반 재확인을 아예 안 거치고 그대로 통과했던 게 원인.
+        // confidence와 무관하게, 도메인 밖 클래스는 무조건 재확인(→ 미지 처리) 대상에 넣는다.
+        this.domainRelevantClasses = new Set([
+            'person', 'car', 'bus', 'truck', 'motorcycle', 'bicycle',
+            'traffic light', 'stop sign', 'bench',
+            'fire hydrant', 'parking meter', 'potted plant', 'chair',
+            'dog', 'cat', 'umbrella', 'backpack', 'suitcase', 'handbag'
+        ]);
+
         // 위험 객체 정의
         this.threatLevels = {
             'car': 0.9,
@@ -363,7 +375,10 @@ export class DetectionManager {
             // person은 갤러리에 일부러 넣지 않았으므로(프라이버시) 재확인 대상에서도 제외 —
             // COCO-SSD 자체 판정을 그대로 신뢰한다. 안 그러면 confidence가 애매한
             // 사람 탐지가 전부 "미지 객체"로 바뀌어 음성 메시지만 불필요하게 부정확해진다.
-            .filter(({ p }) => p.class !== 'person' && p.score < this.lowConfidenceThreshold)
+            // 그 외엔 저confidence이거나, confidence와 무관하게 도메인 밖 클래스(예: elephant,
+            // remote)면 재확인 대상 — 후자는 "확신에 찬 오분류"를 잡기 위한 것.
+            .filter(({ p }) => p.class !== 'person' &&
+                (p.score < this.lowConfidenceThreshold || !this.domainRelevantClasses.has(p.class)))
             .slice(0, this.maxEmbeddingChecksPerCycle);
 
         for (const { p, index } of candidates) {
