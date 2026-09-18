@@ -2,7 +2,8 @@
 export class DataManager {
     constructor() {
         this.dbName = 'SafeWalkDB';
-        this.dbVersion = 1;
+        // v2: 번호판 조회 모드(관리자 도구, 2026-09-19) 스토어 추가 — 기존 스토어는 그대로 유지.
+        this.dbVersion = 2;
         this.db = null;
     }
 
@@ -50,6 +51,26 @@ export class DataManager {
                     const statsStore = db.createObjectStore('dailyStats', {
                         keyPath: 'date'
                     });
+                }
+
+                // 번호판 조회 모드(관리자 도구) — 업로드한 체납차량 목록. 기기 로컬에만
+                // 저장되고 서버로 전송되지 않는다 (docs/제안서 "서버 없음, CSV 업로드" 원칙).
+                if (!db.objectStoreNames.contains('delinquentPlates')) {
+                    db.createObjectStore('delinquentPlates', {
+                        keyPath: 'id',
+                        autoIncrement: true
+                    });
+                }
+
+                // 번호판 조회 모드 — 매칭된 건만 기록한다. 매칭 안 된(=무고한) 차량의
+                // 크롭·인식 텍스트는 애초에 이 스토어에 들어오지 않는다 (plateScanManager.js
+                // 설계 원칙 — 행인/무관 차량 데이터 최소 수집).
+                if (!db.objectStoreNames.contains('plateScans')) {
+                    const plateScanStore = db.createObjectStore('plateScans', {
+                        keyPath: 'id',
+                        autoIncrement: true
+                    });
+                    plateScanStore.createIndex('timestamp', 'timestamp', { unique: false });
                 }
 
                 console.log('데이터베이스 스키마 생성 완료');
@@ -142,6 +163,62 @@ export class DataManager {
 
         store.add(event);
 
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    // 번호판 조회 모드 — CSV로 업로드한 체납차량 목록을 통째로 교체한다.
+    // records: [{ plate, note }] — plate는 plateMatcher.normalizePlate()로 이미 정규화된 값.
+    async replacePlateList(records) {
+        const transaction = this.db.transaction(['delinquentPlates'], 'readwrite');
+        const store = transaction.objectStore('delinquentPlates');
+        store.clear();
+        for (const record of records) {
+            store.add({ plate: record.plate, note: record.note || '' });
+        }
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    async getPlateList() {
+        return this.getAllFromStore('delinquentPlates');
+    }
+
+    async clearPlateList() {
+        const transaction = this.db.transaction(['delinquentPlates'], 'readwrite');
+        transaction.objectStore('delinquentPlates').clear();
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    // 번호판 조회 모드 — 매칭된 건만 기록 (plateScanManager.js가 매칭 안 된 건 애초에 호출 안 함)
+    async savePlateScan(scan) {
+        const transaction = this.db.transaction(['plateScans'], 'readwrite');
+        const store = transaction.objectStore('plateScans');
+        store.add({
+            timestamp: Date.now(),
+            plate: scan.plate,
+            note: scan.note || '',
+            matchType: scan.matchType,
+            cropDataUrl: scan.cropDataUrl || null,
+            location: scan.location || null
+        });
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    async getPlateScans() {
+        const scans = await this.getAllFromStore('plateScans');
+        return scans.sort((a, b) => b.timestamp - a.timestamp);
+    }
+
+    async clearPlateScans() {
+        const transaction = this.db.transaction(['plateScans'], 'readwrite');
+        transaction.objectStore('plateScans').clear();
         return new Promise((resolve) => {
             transaction.oncomplete = () => resolve();
         });

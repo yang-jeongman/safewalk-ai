@@ -13,7 +13,8 @@ export class UIController {
             main: document.getElementById('main'),
             walking: document.getElementById('walking'),
             settings: document.getElementById('settings'),
-            report: document.getElementById('report')
+            report: document.getElementById('report'),
+            plateScan: document.getElementById('plateScan')
         };
 
         // 위험도 표시 요소
@@ -21,6 +22,17 @@ export class UIController {
 
         // 설정 이벤트 바인딩
         this.bindSettingsEvents();
+
+        // 관리자 도구(번호판 조회 모드) 노출 여부 — 일반 보행자 사용자에게는 기본 숨김
+        this.applyAdminToolsVisibility();
+    }
+
+    // 설정의 "관리자 도구 표시"가 꺼져 있으면 메인 화면의 번호판 조회 진입 버튼을 숨긴다.
+    applyAdminToolsVisibility() {
+        const enabled = localStorage.getItem('adminToolsEnabled') === 'true';
+        document.querySelectorAll('.admin-only').forEach(el => {
+            el.style.display = enabled ? '' : 'none';
+        });
     }
 
     switchScreen(screenName) {
@@ -261,6 +273,69 @@ export class UIController {
 
             unknownObjectContribution.checked = localStorage.getItem('unknownObjectContribution') === 'true';
         }
+
+        // 관리자 도구 표시 — 번호판 조회 모드(공무원/파일럿 시연용) 진입 버튼 노출 여부.
+        // 기본 OFF: 일반 보행자 사용자는 이 기능의 존재 자체를 모르게 한다.
+        const adminTools = document.getElementById('adminToolsEnabled');
+        if (adminTools) {
+            adminTools.addEventListener('change', (e) => {
+                localStorage.setItem('adminToolsEnabled', String(e.target.checked));
+                this.applyAdminToolsVisibility();
+            });
+            adminTools.checked = localStorage.getItem('adminToolsEnabled') === 'true';
+        }
+    }
+
+    // 번호판 조회 모드 — 업로드된 체납차량 목록 개수 표시
+    updatePlateCsvSummary(count) {
+        const el = document.getElementById('plateCsvSummary');
+        if (el) el.textContent = count > 0 ? `목록 ${count}건 로드됨` : '업로드된 목록 없음';
+    }
+
+    updatePlateScanStatus(text) {
+        const el = document.getElementById('plateScanStatus');
+        if (el) el.textContent = text;
+    }
+
+    // 매칭 발생 시 화면 배너 — 음성/진동은 app.js가 warningSystem으로 별도 처리
+    showPlateMatchAlert(match) {
+        const zone = document.getElementById('plateAlertZone');
+        if (!zone) return;
+        const alert = document.createElement('div');
+        alert.className = 'alert danger';
+        alert.innerHTML = `
+            <strong>⚠️ 체납차량 발견</strong><br>
+            번호판: ${match.plate}${match.matchType === 'fuzzy' ? ' (유사 매칭, 확인 필요)' : ''}
+            ${match.note ? `<br>${match.note}` : ''}
+        `;
+        zone.innerHTML = '';
+        zone.appendChild(alert);
+        zone.classList.add('active');
+        setTimeout(() => {
+            alert.remove();
+            zone.classList.remove('active');
+        }, 5000);
+    }
+
+    // 번호판 조회 모드 — 오늘/최근 매칭 기록 목록 (매칭 안 된 차량은 애초에 저장 안 됨)
+    renderPlateScanLog(scans) {
+        const el = document.getElementById('plateScanLog');
+        if (!el) return;
+        if (!scans || scans.length === 0) {
+            el.innerHTML = '<p class="report-empty">아직 매칭 기록이 없습니다.</p>';
+            return;
+        }
+        el.innerHTML = scans.slice(0, 30).map(s => {
+            const date = new Date(s.timestamp);
+            const dateStr = `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+            return `
+                <div class="report-session-item">
+                    <span class="report-session-date">${dateStr}</span>
+                    <span>${s.plate}${s.matchType === 'fuzzy' ? ' (유사)' : ''}</span>
+                    <span>${s.note || ''}</span>
+                </div>
+            `;
+        }).join('');
     }
 
     // 통계 표시 업데이트

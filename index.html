@@ -67,6 +67,12 @@
                     <span class="info-value" id="dangerCount">0회</span>
                 </div>
             </div>
+
+            <!-- 관리자 도구 (설정에서 켜야 보임) — 테스트/파일럿용, 일반 보행자 대상 아님 -->
+            <button id="btnPlateScanMode" class="btn-secondary admin-only" style="display:none;">
+                <span class="btn-icon">🚔</span>
+                <span class="btn-text">번호판 조회 모드 (관리자 도구)</span>
+            </button>
         </main>
 
         <!-- 하단 네비게이션 -->
@@ -153,6 +159,50 @@
         </div>
     </div>
 
+    <!-- 번호판 조회 모드 (관리자 도구, 테스트/파일럿용 — 일반 보행자 사용자 대상 아님) -->
+    <div id="plateScan" class="screen">
+        <header class="screen-header">
+            <button class="btn-back" data-back="main">←</button>
+            <h2>번호판 조회 (관리자 도구)</h2>
+        </header>
+
+        <div class="report-content">
+            <div class="plate-disclaimer">
+                ⚠️ 테스트/파일럿용 도구입니다. 발견·기록만 지원하며, 실제 행정 처분은
+                담당자 확인 절차를 그대로 따릅니다.
+            </div>
+
+            <div class="setting-group">
+                <label class="plate-csv-row">
+                    <span>체납차량 목록 (CSV)</span>
+                    <input type="file" id="plateCsvInput" accept=".csv">
+                </label>
+                <div class="plate-csv-status">
+                    <span id="plateCsvSummary">업로드된 목록 없음</span>
+                    <button id="btnPlateCsvClear" class="btn-secondary btn-small">목록 지우기</button>
+                </div>
+            </div>
+
+            <div class="plate-camera-box">
+                <video id="plateVideoElement" autoplay muted playsinline></video>
+                <canvas id="plateCanvasOverlay"></canvas>
+                <div id="plateAlertZone" class="alert-zone"></div>
+            </div>
+
+            <div class="plate-controls">
+                <span id="plateScanStatus" class="plate-status-text">대기 중</span>
+                <button id="btnPlateScanStart" class="btn-primary btn-small">스캔 시작</button>
+                <button id="btnPlateScanStop" class="btn-secondary btn-small">스캔 중지</button>
+            </div>
+
+            <h3 class="report-section-title">매칭 기록</h3>
+            <div id="plateScanLog" class="report-session-list">
+                <p class="report-empty">아직 매칭 기록이 없습니다.</p>
+            </div>
+            <button id="btnPlateScanClearLog" class="btn-secondary btn-small" style="margin-top:10px;">기록 전체 삭제</button>
+        </div>
+    </div>
+
     <!-- 설정 화면 -->
     <div id="settings" class="screen">
         <header class="screen-header">
@@ -203,6 +253,17 @@
                     찍힐 수 있어 명시적으로 켜야만 동작합니다.
                 </p>
             </div>
+            <div class="setting-group">
+                <h3>관리자 도구</h3>
+                <label class="setting-item">
+                    <span>관리자 도구 표시</span>
+                    <input type="checkbox" id="adminToolsEnabled">
+                </label>
+                <p class="setting-desc">
+                    켜면 홈 화면에 "번호판 조회 모드"(테스트/파일럿용) 진입 버튼이 보입니다.
+                    일반 보행 안전 용도가 아니므로 기본값은 꺼짐입니다.
+                </p>
+            </div>
         </div>
     </div>
 
@@ -222,6 +283,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="src/core/app.js" type="module"></script>
 </body>
 </html>

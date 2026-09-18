@@ -19,10 +19,14 @@ const urlsToCache = [
     './src/utils/dataManager.js',
     './src/utils/debugLogger.js',
     './src/utils/unknownObjectExporter.js',
+    './src/plate/plateScanManager.js',
+    './src/plate/plateOcr.js',
+    './src/plate/plateMatcher.js',
     './data/known-objects-gallery.json',
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0',
     'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',
-    'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet'
+    'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet',
+    'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
 ];
 
 // 설치 이벤트

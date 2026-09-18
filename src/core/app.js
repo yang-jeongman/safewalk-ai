@@ -5,6 +5,8 @@ import { UIController } from '../ui/uiController.js';
 import { DataManager } from '../utils/dataManager.js';
 import { debugLogger } from '../utils/debugLogger.js';
 import { exportUnknownObjectQueue } from '../utils/unknownObjectExporter.js';
+import { PlateScanManager } from '../plate/plateScanManager.js';
+import { parsePlateCsv } from '../plate/plateMatcher.js';
 
 class SafeWalkApp {
     constructor() {
@@ -19,6 +21,10 @@ class SafeWalkApp {
         this.walkTimer = null;
         this._lastRecordedEventTime = new Map(); // class -> timestamp, 리포트 기록용 쿨다운
         this.currentSessionId = null; // 체크포인트 upsert 대상 walkSessions row id
+
+        // 번호판 조회 모드 (관리자 도구) — 보행 안전 기능과 독립적인 별도 엔진
+        this.plateScanManager = null;
+        this.plateScanReady = false;
     }
 
     async init() {
@@ -113,9 +119,15 @@ class SafeWalkApp {
         document.querySelectorAll('.btn-back').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const target = e.currentTarget.dataset.back;
+                // 번호판 조회 화면을 벗어날 때 카메라를 켜둔 채로 남기지 않는다
+                if (this.uiController.currentScreen === 'plateScan') {
+                    this.stopPlateScanning();
+                }
                 this.uiController.switchScreen(target);
             });
         });
+
+        this.bindPlateScanEvents();
 
         // 화면이 백그라운드로 가거나(앱 전환, 화면 잠금) 탭/앱이 실제로 닫히는 시점 —
         // 20초 주기 체크포인트(startWalkTimer)만으로는 그 사이 구간이 통째로 빌 수 있고,
@@ -132,7 +144,12 @@ class SafeWalkApp {
                 .catch(() => {});
         };
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'hidden') checkpointNow();
+            if (document.visibilityState === 'hidden') {
+                checkpointNow();
+                // 번호판 조회 모드는 카메라를 계속 켜두면 배터리 소모 + 백그라운드에서
+                // 인식 시도가 이어지는 문제가 있어 화면이 가려지면 바로 멈춘다.
+                if (this.plateScanManager) this.stopPlateScanning();
+            }
         });
         window.addEventListener('pagehide', checkpointNow);
     }
@@ -268,6 +285,116 @@ class SafeWalkApp {
             this.dataManager.analyzeDangerPatterns()
         ]);
         this.uiController.renderReport(stats, patterns);
+    }
+
+    // 번호판 조회 모드 (관리자 도구, 테스트/파일럿용 — docs/지자체 체납차량 조회 시스템
+    // 제안서 참고). 설정에서 "관리자 도구 표시"를 켜야 메인 화면에 진입 버튼이 보인다.
+    bindPlateScanEvents() {
+        const btnOpen = document.getElementById('btnPlateScanMode');
+        if (btnOpen) {
+            btnOpen.addEventListener('click', () => this.openPlateScan());
+        }
+
+        const csvInput = document.getElementById('plateCsvInput');
+        if (csvInput) {
+            csvInput.addEventListener('change', (e) => this.handlePlateCsvUpload(e.target.files[0]));
+        }
+
+        const btnCsvClear = document.getElementById('btnPlateCsvClear');
+        if (btnCsvClear) {
+            btnCsvClear.addEventListener('click', async () => {
+                await this.dataManager.clearPlateList();
+                this.plateScanManager?.setPlateList([]);
+                this.uiController.updatePlateCsvSummary(0);
+            });
+        }
+
+        const btnStart = document.getElementById('btnPlateScanStart');
+        if (btnStart) {
+            btnStart.addEventListener('click', () => this.startPlateScanning());
+        }
+
+        const btnStop = document.getElementById('btnPlateScanStop');
+        if (btnStop) {
+            btnStop.addEventListener('click', () => this.stopPlateScanning());
+        }
+
+        const btnClearLog = document.getElementById('btnPlateScanClearLog');
+        if (btnClearLog) {
+            btnClearLog.addEventListener('click', async () => {
+                await this.dataManager.clearPlateScans();
+                this.refreshPlateScanLog();
+            });
+        }
+    }
+
+    async openPlateScan() {
+        const list = await this.dataManager.getPlateList();
+        this.uiController.updatePlateCsvSummary(list.length);
+        await this.refreshPlateScanLog();
+        this.uiController.switchScreen('plateScan');
+    }
+
+    async refreshPlateScanLog() {
+        const scans = await this.dataManager.getPlateScans();
+        this.uiController.renderPlateScanLog(scans);
+    }
+
+    async handlePlateCsvUpload(file) {
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const records = parsePlateCsv(text);
+            await this.dataManager.replacePlateList(records);
+            this.plateScanManager?.setPlateList(records);
+            this.uiController.updatePlateCsvSummary(records.length);
+            debugLogger.log(`[번호판조회] CSV 업로드: ${records.length}건 로드`);
+        } catch (err) {
+            debugLogger.log(`[번호판조회] CSV 업로드 실패: ${err}`);
+            this.uiController.showAlert('CSV 파일을 읽을 수 없습니다', 'error');
+        }
+    }
+
+    async startPlateScanning() {
+        this.uiController.updatePlateScanStatus('카메라/모델 준비 중...');
+        try {
+            if (!this.plateScanManager) {
+                this.plateScanManager = new PlateScanManager();
+                this.plateScanManager.onMatch = (match, cropDataUrl) => this.handlePlateMatch(match, cropDataUrl);
+                this.plateScanManager.onStatus = (text) => this.uiController.updatePlateScanStatus(text);
+                await this.plateScanManager.init();
+                const list = await this.dataManager.getPlateList();
+                this.plateScanManager.setPlateList(list);
+                this.plateScanReady = true;
+            }
+            this.plateScanManager.start();
+            this.uiController.updatePlateScanStatus('스캔 중');
+        } catch (err) {
+            debugLogger.log(`[번호판조회] 시작 실패: ${err}`);
+            this.uiController.showAlert('카메라를 시작할 수 없습니다', 'error');
+        }
+    }
+
+    stopPlateScanning() {
+        if (this.plateScanManager) {
+            this.plateScanManager.stop();
+            this.plateScanManager = null;
+            this.plateScanReady = false;
+        }
+        this.uiController.updatePlateScanStatus('중지됨');
+    }
+
+    async handlePlateMatch(match, cropDataUrl) {
+        await this.dataManager.savePlateScan({
+            plate: match.plate,
+            note: match.note,
+            matchType: match.matchType,
+            cropDataUrl
+        });
+        this.uiController.showPlateMatchAlert(match);
+        this.warningSystem.info(`체납차량 발견, 번호판 ${match.plate}`);
+        if (navigator.vibrate) navigator.vibrate([300, 100, 300, 100, 300]);
+        this.refreshPlateScanLog();
     }
 
     startWalkTimer() {

@@ -568,6 +568,94 @@ body {
     text-align: center;
 }
 
+/* 보조 버튼 (번호판 조회 모드 등 관리자 도구에서 사용) */
+.btn-secondary {
+    background: white;
+    color: var(--text);
+    border: 1px solid #ddd;
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-small {
+    padding: 8px 14px;
+    font-size: 13px;
+}
+
+/* 번호판 조회 모드 (관리자 도구) */
+.plate-disclaimer {
+    background: #fff3cd;
+    border: 1px solid #ffe08a;
+    color: #7a5b00;
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+}
+
+.plate-csv-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.plate-csv-status {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text-light);
+}
+
+.plate-camera-box {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    background: black;
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin: 16px 0;
+}
+
+.plate-camera-box video,
+.plate-camera-box canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.plate-camera-box canvas {
+    pointer-events: none;
+}
+
+.plate-camera-box .alert-zone {
+    bottom: 12px;
+    left: 12px;
+    right: 12px;
+}
+
+.plate-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.plate-status-text {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-light);
+}
+
 /* 반응형 */
 @media (min-width: 768px) {
     .main-content {
