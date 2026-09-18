@@ -493,7 +493,10 @@ export class DetectionManager {
                 score: pred.score,
                 timestamp: Date.now()
             });
-            while (queue.length > 20) queue.shift(); // 로컬 큐 크기 제한
+            // 로컬 큐 크기 제한. 224px JPEG(q=0.6) data URL 1개 ≈ 15~27KB, 150개면 최대 ~4MB로
+            // localStorage 출처당 한도(보통 5~10MB) 안에 여유 있게 들어온다. 기존 20개는 공원
+            // 산책처럼 긴 세션에서 금방 밀려나 초반 관찰이 사라진다는 사용자 피드백(2026-09-18)으로 상향.
+            while (queue.length > 150) queue.shift();
             localStorage.setItem('unknownObjectQueue', JSON.stringify(queue));
             debugLogger.log(`[오픈셋] 미지 객체 로컬 큐 저장 (${queue.length}개 대기, 디버그 패널에서 내보내기 가능)`);
         } catch (err) {

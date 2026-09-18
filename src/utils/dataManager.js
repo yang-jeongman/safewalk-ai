@@ -57,8 +57,18 @@ export class DataManager {
         });
     }
 
-    // 보행 세션 저장
-    async saveWalkSession(sessionData) {
+    // 보행 세션 저장/갱신.
+    // options.id가 있으면 기존 레코드를 그 자리에서 갱신(체크포인트용), 없으면 새로 생성.
+    // options.updateDailyStats가 true일 때만 dailyStats 누적에 반영한다 — 세션당 정확히
+    // 한 번만(보통 종료 시) true로 호출해야 이중 집계를 피할 수 있다. 중간 체크포인트는
+    // false로 호출해 walkSessions 레코드만 최신 상태로 유지한다.
+    //
+    // 도입 이유(2026-09-19): 앱을 "정지" 버튼 없이 실수로 닫으면 stopWalking()이 한 번도
+    // 안 불려서 그 세션이 walkSessions에 아예 안 남았다 — 개별 위험 이벤트(dangerEvents)는
+    // saveDangerEvent()로 즉시 저장돼 살아있는데 세션 요약만 통째로 사라지는 불일치가 있었다.
+    // 주기적 체크포인트로 최소한 마지막 체크포인트 시점까지는 리포트에 남도록 한다.
+    async saveWalkSession(sessionData, options = {}) {
+        const { id = null, updateDailyStats = true } = options;
         const transaction = this.db.transaction(['walkSessions', 'dailyStats'], 'readwrite');
         const walkStore = transaction.objectStore('walkSessions');
         const statsStore = transaction.objectStore('dailyStats');
@@ -72,11 +82,17 @@ export class DataManager {
             distance: sessionData.distance || 0,
             safetyScore: this.calculateSafetyScore(sessionData)
         };
+        if (id !== null) session.id = id;
 
-        // 세션 저장
-        const sessionRequest = walkStore.add(session);
+        // id가 있으면 그 레코드를 덮어쓰고(체크포인트 갱신), 없으면 새로 만든다
+        const sessionRequest = id !== null ? walkStore.put(session) : walkStore.add(session);
 
+        let savedId = id;
         sessionRequest.onsuccess = async () => {
+            savedId = sessionRequest.result;
+
+            if (!updateDailyStats) return;
+
             // 일일 통계 업데이트
             const date = session.date;
             const statsRequest = statsStore.get(date);
@@ -105,7 +121,7 @@ export class DataManager {
         };
 
         return new Promise((resolve) => {
-            transaction.oncomplete = () => resolve();
+            transaction.oncomplete = () => resolve(savedId);
         });
     }
 

@@ -18,6 +18,7 @@ class SafeWalkApp {
         this.dangerCount = 0;
         this.walkTimer = null;
         this._lastRecordedEventTime = new Map(); // class -> timestamp, 리포트 기록용 쿨다운
+        this.currentSessionId = null; // 체크포인트 upsert 대상 walkSessions row id
     }
 
     async init() {
@@ -105,6 +106,25 @@ class SafeWalkApp {
                 this.uiController.switchScreen(target);
             });
         });
+
+        // 화면이 백그라운드로 가거나(앱 전환, 화면 잠금) 탭/앱이 실제로 닫히는 시점 —
+        // 20초 주기 체크포인트(startWalkTimer)만으로는 그 사이 구간이 통째로 빌 수 있고,
+        // 모바일에서 setInterval은 백그라운드 시 스로틀/정지될 수 있어 더더욱 그렇다.
+        // beforeunload는 iOS Safari에서 신뢰할 수 없어 visibilitychange/pagehide를 쓴다.
+        const checkpointNow = () => {
+            if (!this.isWalking || !this.walkStartTime) return;
+            this.dataManager.saveWalkSession({
+                duration: Date.now() - this.walkStartTime,
+                dangerCount: this.dangerCount,
+                timestamp: this.walkStartTime
+            }, { id: this.currentSessionId, updateDailyStats: false })
+                .then((id) => { this.currentSessionId = id; })
+                .catch(() => {});
+        };
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') checkpointNow();
+        });
+        window.addEventListener('pagehide', checkpointNow);
     }
 
     async startWalking() {
@@ -115,6 +135,7 @@ class SafeWalkApp {
         this.walkStartTime = Date.now();
         this.dangerCount = 0;
         this._lastRecordedEventTime.clear();
+        this.currentSessionId = null;
 
         // UI 전환
         this.uiController.switchScreen('walking');
@@ -163,13 +184,15 @@ class SafeWalkApp {
             this.walkTimer = null;
         }
 
-        // 데이터 저장
+        // 데이터 저장 — 정상 종료 시의 최종 저장. 중간 체크포인트(startWalkTimer 참고)로
+        // 이미 만들어진 row가 있으면 그 row를 갱신하며 dailyStats에 정확히 한 번 반영한다.
         const walkDuration = Date.now() - this.walkStartTime;
         this.dataManager.saveWalkSession({
             duration: walkDuration,
             dangerCount: this.dangerCount,
             timestamp: this.walkStartTime
-        });
+        }, { id: this.currentSessionId, updateDailyStats: true });
+        this.currentSessionId = null;
 
         // UI 전환
         this.uiController.switchScreen('main');
@@ -238,6 +261,7 @@ class SafeWalkApp {
     }
 
     startWalkTimer() {
+        let tickCount = 0;
         this.walkTimer = setInterval(() => {
             const elapsed = Date.now() - this.walkStartTime;
             const minutes = Math.floor(elapsed / 60000);
@@ -245,6 +269,21 @@ class SafeWalkApp {
             const timeStr = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 
             document.getElementById('walkingTime').textContent = timeStr;
+
+            // 20초마다 체크포인트 저장 — "정지" 버튼 없이 앱이 강제 종료/새로고침돼도
+            // 최소한 마지막 체크포인트 시점까지는 리포트의 보행 기록에 남도록 한다.
+            // dailyStats는 여기서 건드리지 않는다(stopWalking에서 최종 1회만 반영 —
+            // 안 그러면 체크포인트마다 누적치를 중복 합산하게 된다).
+            tickCount++;
+            if (tickCount % 20 === 0) {
+                this.dataManager.saveWalkSession({
+                    duration: elapsed,
+                    dangerCount: this.dangerCount,
+                    timestamp: this.walkStartTime
+                }, { id: this.currentSessionId, updateDailyStats: false })
+                    .then((id) => { this.currentSessionId = id; })
+                    .catch((err) => debugLogger.log(`[체크포인트] 저장 실패: ${err}`));
+            }
         }, 1000);
     }
 
