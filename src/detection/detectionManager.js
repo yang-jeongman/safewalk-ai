@@ -148,12 +148,12 @@ export class DetectionManager {
         }
 
         // COCO-SSD 모델 로드.
-        // 기본값(lite_mobilenet_v2)은 가볍지만 작은/먼 물체(특히 신호등)를 잘 놓친다.
-        // 2026-09-17 사용자 요청("거리가 멀어도 신호등 인식") 대응으로 더 정확한
-        // mobilenet_v2 base로 전환 — 대신 모델이 더 무겁고 느리다. 실기기에서
-        // 프레임레이트 저하가 체감되면 아래 값을 'lite_mobilenet_v2'로 되돌릴 것.
+        // mobilenet_v2(원거리 신호등 인식 개선용, 2026-09-17)로 전환했다가 실기기 실측
+        // (2026-09-19)에서 stage1이 1~4fps까지 떨어지는 것을 확인 — 그 커밋 자체가
+        // "느려지면 되돌릴 것"이라 명시해둔 상황. 반응속도가 실제 안전과 직결되므로
+        // 원거리 신호등 인식 개선보다 프레임레이트를 우선해 되돌린다.
         console.log('AI 모델 로딩 중...');
-        this.cocoSsdBase = 'mobilenet_v2';
+        this.cocoSsdBase = 'lite_mobilenet_v2';
         this.model = await cocoSsd.load({ base: this.cocoSsdBase });
         console.log(`AI 모델 로드 완료 (base=${this.cocoSsdBase})`);
 
