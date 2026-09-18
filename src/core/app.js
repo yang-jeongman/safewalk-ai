@@ -17,6 +17,7 @@ class SafeWalkApp {
         this.walkStartTime = null;
         this.dangerCount = 0;
         this.walkTimer = null;
+        this._lastRecordedEventTime = new Map(); // class -> timestamp, 리포트 기록용 쿨다운
     }
 
     async init() {
@@ -113,6 +114,7 @@ class SafeWalkApp {
         this.isWalking = true;
         this.walkStartTime = Date.now();
         this.dangerCount = 0;
+        this._lastRecordedEventTime.clear();
 
         // UI 전환
         this.uiController.switchScreen('walking');
@@ -183,11 +185,14 @@ class SafeWalkApp {
         );
 
         // 위험도에 따른 경고
+        // dangerCount는 홈 화면 요약 수치와 리포트 상단 카드(walkSession.dangerCount)의
+        // 근거이기도 하다 — recordDangerEvent()와 같은 쿨다운 판단을 쓰지 않으면 "자주
+        // 감지된 물체" 목록(dangerEvents 기반)과 상단 요약 숫자가 서로 다른 카운터라
+        // 불일치하게 된다. recordDangerEvent()가 실제로 기록했을 때만 증가시켜 맞춘다.
         if (mostDangerous.level > 0.7) {
-            this.dangerCount++;
             this.warningSystem.alert(mostDangerous);
             this.uiController.showDanger(mostDangerous);
-            this.recordDangerEvent(mostDangerous);
+            if (this.recordDangerEvent(mostDangerous)) this.dangerCount++;
         } else if (mostDangerous.level > 0.4) {
             this.warningSystem.warn(mostDangerous);
             this.uiController.showWarning(mostDangerous);
@@ -200,7 +205,20 @@ class SafeWalkApp {
 
     // 리포트 화면의 "자주 감지된 물체" 통계용 — dataManager.saveDangerEvent()는
     // 원래부터 있었지만 실제로 호출하는 곳이 없어 dangerEvents가 항상 비어있었다.
+    //
+    // 실측(2026-09-18)에서 드러난 문제: 음성 경고엔 쿨다운(2~3초)이 있어 안 시끄러웠지만,
+    // 이 기록 자체엔 쿨다운이 없었다. 같은 물체(예: 지나치는 기둥)가 화면에 몇 초만
+    // 머물러도 감지 사이클(300ms)마다 별도 이벤트로 기록되어, "한 번의 마주침"이
+    // 통계엔 10~15건으로 부풀려졌다. 클래스별 쿨다운으로 "같은 마주침"을 한 건으로 묶는다.
+    // 반환값: 이번 호출이 실제로 기록됐는지(쿨다운에 걸려 무시됐으면 false) —
+    // 호출 쪽에서 dangerCount 등 다른 집계도 같은 판단 기준으로 맞추는 데 쓴다.
     recordDangerEvent(threat) {
+        const now = Date.now();
+        const lastTime = this._lastRecordedEventTime.get(threat.class) || 0;
+        const cooldownMs = 3000;
+        if (now - lastTime < cooldownMs) return false;
+
+        this._lastRecordedEventTime.set(threat.class, now);
         this.dataManager.saveDangerEvent({
             sessionId: this.walkStartTime,
             objectClass: threat.class,
@@ -208,6 +226,7 @@ class SafeWalkApp {
             distance: threat.distance,
             direction: threat.direction
         });
+        return true;
     }
 
     async renderReport() {
