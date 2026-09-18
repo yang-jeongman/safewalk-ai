@@ -200,6 +200,24 @@
                 <p class="report-empty">아직 매칭 기록이 없습니다.</p>
             </div>
             <button id="btnPlateScanClearLog" class="btn-secondary btn-small" style="margin-top:10px;">기록 전체 삭제</button>
+
+            <div class="setting-group" style="margin-top:20px;">
+                <label class="setting-item">
+                    <span>오늘 인식 결과 임시 기록 (정확도 테스트용)</span>
+                    <input type="checkbox" id="plateTestLogEnabled">
+                </label>
+                <p class="setting-desc">
+                    켜면 체납차량 매칭 여부와 상관없이, 오늘 인식된 모든 번호판 텍스트와
+                    번호판 부분 크롭(차량 전체 사진·사람 제외)만 임시로 남겨 그날 인식
+                    정확도를 확인할 수 있습니다. 내보내기/업로드 기능은 없고, 자정이
+                    지나면(다음 접속 시) 자동으로 삭제됩니다. 기본값은 꺼짐입니다.
+                </p>
+            </div>
+            <h3 class="report-section-title">오늘 인식 기록 (자정 자동삭제)</h3>
+            <div id="plateTestLog" class="report-session-list">
+                <p class="report-empty">오늘 기록이 없습니다.</p>
+            </div>
+            <button id="btnPlateTestLogClear" class="btn-secondary btn-small" style="margin-top:10px;">지금 삭제</button>
         </div>
     </div>
 

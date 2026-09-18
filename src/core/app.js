@@ -50,6 +50,7 @@ class SafeWalkApp {
         // 저장된 데이터 로드
         await this.dataManager.init();
         this.updateStats();
+        this.dataManager.purgeOldTestLog(); // 번호판 테스트 로그 자정 자동삭제 — 앱 열 때마다 점검
 
         // 스플래시 화면 제거
         setTimeout(() => {
@@ -326,18 +327,52 @@ class SafeWalkApp {
                 this.refreshPlateScanLog();
             });
         }
+
+        // 정확도 테스트 로그 (당일 한정, 자정 자동삭제) — 기본 OFF, 매칭 여부와
+        // 무관하게 "오늘 인식된 번호판 텍스트"를 그날그날 확인하는 용도.
+        const testLogToggle = document.getElementById('plateTestLogEnabled');
+        if (testLogToggle) {
+            testLogToggle.addEventListener('change', (e) => {
+                localStorage.setItem('plateTestLogEnabled', String(e.target.checked));
+            });
+            testLogToggle.checked = localStorage.getItem('plateTestLogEnabled') === 'true';
+        }
+
+        const btnClearTestLog = document.getElementById('btnPlateTestLogClear');
+        if (btnClearTestLog) {
+            btnClearTestLog.addEventListener('click', async () => {
+                await this.dataManager.clearTestLogNow();
+                this.refreshPlateTestLog();
+            });
+        }
     }
 
     async openPlateScan() {
+        // 날짜가 바뀌었으면 전날 이전 테스트 로그를 먼저 정리 (자정 자동삭제 구현)
+        await this.dataManager.purgeOldTestLog();
         const list = await this.dataManager.getPlateList();
         this.uiController.updatePlateCsvSummary(list.length);
         await this.refreshPlateScanLog();
+        await this.refreshPlateTestLog();
         this.uiController.switchScreen('plateScan');
     }
 
     async refreshPlateScanLog() {
         const scans = await this.dataManager.getPlateScans();
         this.uiController.renderPlateScanLog(scans);
+    }
+
+    async refreshPlateTestLog() {
+        const entries = await this.dataManager.getTestLogForToday();
+        this.uiController.renderPlateTestLog(entries);
+    }
+
+    // 정확도 테스트 로그용 — 매칭 여부와 무관하게 OCR이 시도될 때마다 불림.
+    // 옵트인(plateTestLogEnabled)이 꺼져 있으면 아무것도 저장하지 않는다.
+    async handlePlateRecognized(rec) {
+        if (localStorage.getItem('plateTestLogEnabled') !== 'true') return;
+        await this.dataManager.saveTestLogEntry(rec);
+        this.refreshPlateTestLog();
     }
 
     async handlePlateCsvUpload(file) {
@@ -362,6 +397,7 @@ class SafeWalkApp {
                 this.plateScanManager = new PlateScanManager();
                 this.plateScanManager.onMatch = (match, cropDataUrl) => this.handlePlateMatch(match, cropDataUrl);
                 this.plateScanManager.onStatus = (text) => this.uiController.updatePlateScanStatus(text);
+                this.plateScanManager.onRecognized = (rec) => this.handlePlateRecognized(rec);
                 await this.plateScanManager.init();
                 const list = await this.dataManager.getPlateList();
                 this.plateScanManager.setPlateList(list);

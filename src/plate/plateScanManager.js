@@ -4,7 +4,7 @@
 // 분리한다 — 이 모드의 버그가 보행 안전 기능에 영향을 줄 수 없게 하기 위함.
 import { ObjectTracker } from '../detection/objectTracker.js';
 import { PlateOcr } from './plateOcr.js';
-import { findMatch } from './plateMatcher.js';
+import { findMatch, normalizePlate } from './plateMatcher.js';
 import { classifyPlateColor } from './plateColor.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
@@ -30,6 +30,11 @@ export class PlateScanManager {
         this.plateList = []; // dataManager.getPlateList()에서 로드된 정규화된 목록
         this.onMatch = null; // (match, cropDataUrl) => void — 매칭된 건만 호출됨
         this.onStatus = null; // (text) => void — 화면 상태 텍스트 업데이트용
+
+        // 정확도 테스트 로그용 — 매칭 여부와 무관하게 "번호판다운 영역에서 OCR을
+        // 시도했다"는 사실마다 호출됨. app.js가 옵트인 설정을 보고 실제 기록 여부를
+        // 결정한다 (기본은 아무 데도 저장 안 함 — 이 콜백을 아무도 구독 안 하면 끝).
+        this.onRecognized = null; // ({ text, colorLabel, cropDataUrl }) => void
     }
 
     setPlateList(list) {
@@ -168,17 +173,22 @@ export class PlateScanManager {
             this.onStatus?.('번호판 인식 중...');
             const text = await this.ocr.recognize(cropCanvas);
             const match = findMatch(text, this.plateList);
+            // 매칭 결과와 무관하게 크롭은 한 번만 만들어 두 콜백이 같이 쓴다
+            // (onMatch는 CSV 매칭 시에만, onRecognized는 정확도 테스트 옵트인 시에만
+            // 실제로 저장으로 이어진다 — 호출 자체는 항상 일어나지만 저장 여부는 app.js가 결정)
+            const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.7);
 
             if (match) {
                 match.colorLabel = colorInfo.label;
                 debugLogger.log(`[번호판조회] 매칭: "${text.trim()}" → ${match.plate} (${match.matchType}, ${colorInfo.label})`);
-                const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.7);
                 this.onMatch?.(match, cropDataUrl);
             } else {
-                // 매칭 안 된 차량 — 인식 텍스트/크롭을 어디에도 남기지 않는다 (무관 차량
-                // 데이터 최소 수집 원칙). 디버그 로그에도 원문 텍스트를 남기지 않는다.
-                debugLogger.log('[번호판조회] 매칭 없음 (기록 안 함)');
+                // 매칭 안 된 차량 — CSV 목록(체납차량 매칭 기록)에는 절대 안 들어간다.
+                // 다만 정확도 테스트 로그는 사용자가 명시적으로 켰을 때만 별도로 남는다
+                // (당일 한정, 자정 자동삭제 — dataManager.saveTestLogEntry 참고).
+                debugLogger.log('[번호판조회] 매칭 없음 (체납차량 기록엔 저장 안 함)');
             }
+            this.onRecognized?.({ text: normalizePlate(text), colorLabel: colorInfo.label, cropDataUrl });
             this.onStatus?.('스캔 중');
         } catch (err) {
             debugLogger.log(`[번호판조회] OCR 실패: ${err}`);

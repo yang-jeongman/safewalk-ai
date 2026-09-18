@@ -2,8 +2,8 @@
 export class DataManager {
     constructor() {
         this.dbName = 'SafeWalkDB';
-        // v2: 번호판 조회 모드(관리자 도구, 2026-09-19) 스토어 추가 — 기존 스토어는 그대로 유지.
-        this.dbVersion = 2;
+        // v3: 번호판 인식 정확도 테스트 로그(당일 한정, 자정 지나면 파기) 스토어 추가.
+        this.dbVersion = 3;
         this.db = null;
     }
 
@@ -71,6 +71,19 @@ export class DataManager {
                         autoIncrement: true
                     });
                     plateScanStore.createIndex('timestamp', 'timestamp', { unique: false });
+                }
+
+                // 번호판 인식 정확도 테스트 로그 — 매칭 여부와 무관하게 "오늘 인식된
+                // 번호판 텍스트"를 당일 한정으로만 남긴다. 기본 OFF(옵트인), 내보내기/
+                // 업로드 기능 없음, 차량 전체 사진이 아니라 번호판 크롭만 저장, 자정이
+                // 지나면(purgeOldTestLog) 전날 이전 기록은 삭제된다 — "매일 반복 축적되는
+                // 이웃 차량 이동 기록"이 되지 않도록 하루 단위로만 존재하게 하는 설계.
+                if (!db.objectStoreNames.contains('plateTestLog')) {
+                    const testLogStore = db.createObjectStore('plateTestLog', {
+                        keyPath: 'id',
+                        autoIncrement: true
+                    });
+                    testLogStore.createIndex('date', 'date', { unique: false });
                 }
 
                 console.log('데이터베이스 스키마 생성 완료');
@@ -220,6 +233,60 @@ export class DataManager {
     async clearPlateScans() {
         const transaction = this.db.transaction(['plateScans'], 'readwrite');
         transaction.objectStore('plateScans').clear();
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    // 번호판 인식 정확도 테스트 로그 — 당일 한정. entry: { text, colorLabel, cropDataUrl }
+    async saveTestLogEntry(entry) {
+        const today = new Date().toISOString().split('T')[0];
+        const transaction = this.db.transaction(['plateTestLog'], 'readwrite');
+        transaction.objectStore('plateTestLog').add({
+            timestamp: Date.now(),
+            date: today,
+            text: entry.text,
+            colorLabel: entry.colorLabel || null,
+            cropDataUrl: entry.cropDataUrl || null
+        });
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    async getTestLogForToday() {
+        const today = new Date().toISOString().split('T')[0];
+        const transaction = this.db.transaction(['plateTestLog'], 'readonly');
+        const index = transaction.objectStore('plateTestLog').index('date');
+        const request = index.getAll(today);
+        return new Promise((resolve) => {
+            request.onsuccess = () => resolve((request.result || []).sort((a, b) => b.timestamp - a.timestamp));
+        });
+    }
+
+    // 오늘 날짜가 아닌 테스트 로그 항목을 모두 삭제한다 — "자정 지나면 자동 삭제" 구현.
+    // 정확히 자정 타이머로 도는 게 아니라, 앱을 열거나 이 모드에 들어올 때마다 호출해
+    // 날짜가 바뀐 걸 감지하는 방식 (도구 성격상 이 정도면 충분 — 앱을 하루 종일 켜둔
+    // 채로 자정을 넘기는 사용 패턴은 상정하지 않음).
+    async purgeOldTestLog() {
+        const today = new Date().toISOString().split('T')[0];
+        const transaction = this.db.transaction(['plateTestLog'], 'readwrite');
+        const store = transaction.objectStore('plateTestLog');
+        const request = store.openCursor();
+        request.onsuccess = (event) => {
+            const cursor = event.target.result;
+            if (!cursor) return;
+            if (cursor.value.date !== today) cursor.delete();
+            cursor.continue();
+        };
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    async clearTestLogNow() {
+        const transaction = this.db.transaction(['plateTestLog'], 'readwrite');
+        transaction.objectStore('plateTestLog').clear();
         return new Promise((resolve) => {
             transaction.oncomplete = () => resolve();
         });

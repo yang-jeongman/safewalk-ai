@@ -339,6 +339,30 @@ export class UIController {
         }).join('');
     }
 
+    // 번호판 인식 정확도 테스트 로그 (당일 한정) — 크롭 썸네일을 함께 보여줘
+    // "실제 번호판 vs 인식된 텍스트"를 그 자리에서 눈으로 비교할 수 있게 한다.
+    renderPlateTestLog(entries) {
+        const el = document.getElementById('plateTestLog');
+        if (!el) return;
+        if (!entries || entries.length === 0) {
+            el.innerHTML = '<p class="report-empty">오늘 기록이 없습니다.</p>';
+            return;
+        }
+        el.innerHTML = entries.map(e => {
+            const time = new Date(e.timestamp);
+            const timeStr = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+            return `
+                <div class="plate-test-log-item">
+                    ${e.cropDataUrl ? `<img src="${e.cropDataUrl}" class="plate-test-thumb" alt="번호판 크롭">` : ''}
+                    <div class="plate-test-log-info">
+                        <span>${e.text || '(인식 실패)'}${e.colorLabel ? ` · ${e.colorLabel}` : ''}</span>
+                        <span class="report-session-date">${timeStr}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
     // 통계 표시 업데이트
     updateStats(stats) {
         // 안전 점수

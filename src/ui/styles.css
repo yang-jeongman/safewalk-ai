@@ -656,6 +656,32 @@ body {
     color: var(--text-light);
 }
 
+.plate-test-log-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    border-bottom: 1px solid #eee;
+}
+
+.plate-test-log-item:last-child {
+    border-bottom: none;
+}
+
+.plate-test-thumb {
+    width: 60px;
+    height: auto;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.plate-test-log-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 14px;
+}
+
 /* 반응형 */
 @media (min-width: 768px) {
     .main-content {
