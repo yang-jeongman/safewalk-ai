@@ -92,11 +92,21 @@ class SafeWalkApp {
             }
             this.detectionManager.toggleMotionGate();
         });
-        document.getElementById('btnDebugExport').addEventListener('click', () => {
-            const { count } = exportUnknownObjectQueue();
-            debugLogger.log(count > 0
-                ? `[오픈셋] 미지 객체 ${count}개를 ZIP으로 내보냈습니다`
-                : '[오픈셋] 내보낼 미지 객체가 없습니다 (큐가 비어있음)');
+        document.getElementById('btnDebugExport').addEventListener('click', async (e) => {
+            // 큐가 최대 150개까지 쌓일 수 있어 ZIP 생성에 수 초가 걸린다(비동기,
+            // 청크 단위로 메인 스레드 양보 — unknownObjectExporter.js 참고). 그동안
+            // 버튼을 비활성화해 연타로 인한 중복 내보내기를 막는다.
+            const btn = e.currentTarget;
+            btn.disabled = true;
+            debugLogger.log('[오픈셋] 미지 객체 내보내는 중...');
+            try {
+                const { count } = await exportUnknownObjectQueue();
+                debugLogger.log(count > 0
+                    ? `[오픈셋] 미지 객체 ${count}개를 ZIP으로 내보냈습니다`
+                    : '[오픈셋] 내보낼 미지 객체가 없습니다 (큐가 비어있음)');
+            } finally {
+                btn.disabled = false;
+            }
         });
 
         // 뒤로 가기 버튼

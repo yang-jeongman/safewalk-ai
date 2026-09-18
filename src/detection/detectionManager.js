@@ -104,7 +104,13 @@ export class DetectionManager {
             // 전봇대/기둥 등 "길고 가는 수직 구조물" — 기둥게이트가 접근 여부와 무관하게
             // 상시 감지(poleGate.js). 정밀 분류가 아닌 기하학적 추정이라 obstacle보다는
             // 낮게, 사람과 비슷한 수준으로 취급.
-            'pole': 0.6
+            'pole': 0.6,
+            // open-set 갤러리 항목 (2026-09-18, 실사용자 "clock"/"fire_hydrant" 오분류 크롭에서 발견).
+            // 맨홀 뚜껑: 평평하게 지면과 같은 높이라 충돌 위험은 낮음 — 정보성 수준으로만 알림.
+            'manhole': 0.15,
+            // 볼라드: 보행로 한가운데 고정된 낮은 기둥으로, 시각장애인 보행 사고의 대표
+            // 원인 중 하나 — 전봇대/기둥(pole)과 동급의 실질적 충돌 위험으로 취급.
+            'bollard': 0.6
         };
 
         // 아이콘 매핑
@@ -119,7 +125,9 @@ export class DetectionManager {
             'stop sign': '🛑',
             'obstacle': '🧱',
             'pole': '🪧',
-            'bench': '🪑'
+            'bench': '🪑',
+            'manhole': '🕳️',
+            'bollard': '🚧'
         };
     }
 
