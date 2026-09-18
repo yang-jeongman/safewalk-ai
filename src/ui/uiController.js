@@ -306,6 +306,7 @@ export class UIController {
         alert.innerHTML = `
             <strong>⚠️ 체납차량 발견</strong><br>
             번호판: ${match.plate}${match.matchType === 'fuzzy' ? ' (유사 매칭, 확인 필요)' : ''}
+            ${match.colorLabel ? ` · ${match.colorLabel}` : ''}
             ${match.note ? `<br>${match.note}` : ''}
         `;
         zone.innerHTML = '';
@@ -331,7 +332,7 @@ export class UIController {
             return `
                 <div class="report-session-item">
                     <span class="report-session-date">${dateStr}</span>
-                    <span>${s.plate}${s.matchType === 'fuzzy' ? ' (유사)' : ''}</span>
+                    <span>${s.plate}${s.matchType === 'fuzzy' ? ' (유사)' : ''}${s.colorLabel ? ` · ${s.colorLabel}` : ''}</span>
                     <span>${s.note || ''}</span>
                 </div>
             `;

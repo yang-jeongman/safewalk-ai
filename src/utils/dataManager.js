@@ -203,6 +203,7 @@ export class DataManager {
             plate: scan.plate,
             note: scan.note || '',
             matchType: scan.matchType,
+            colorLabel: scan.colorLabel || null,
             cropDataUrl: scan.cropDataUrl || null,
             location: scan.location || null
         });

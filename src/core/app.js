@@ -389,6 +389,7 @@ class SafeWalkApp {
             plate: match.plate,
             note: match.note,
             matchType: match.matchType,
+            colorLabel: match.colorLabel,
             cropDataUrl
         });
         this.uiController.showPlateMatchAlert(match);

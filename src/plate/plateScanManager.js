@@ -5,6 +5,7 @@
 import { ObjectTracker } from '../detection/objectTracker.js';
 import { PlateOcr } from './plateOcr.js';
 import { findMatch } from './plateMatcher.js';
+import { classifyPlateColor } from './plateColor.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 const VEHICLE_CLASSES = new Set(['car', 'truck', 'bus']);
@@ -147,14 +148,30 @@ export class PlateScanManager {
 
     async runOcr(vehicle) {
         this._ocrInFlight = true;
-        this.onStatus?.('번호판 인식 중...');
+        this.onStatus?.('번호판 위치 확인 중...');
         try {
             const cropCanvas = this.cropPlateRegion(vehicle.bbox);
+            const cropCtx = cropCanvas.getContext('2d');
+            const imageData = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
+
+            // 번호판 특유의 단색 배경(흰/파랑/노랑/연두/주황/감청)인지 먼저 확인 —
+            // 아니면 범퍼·그릴 등 엉뚱한 영역일 가능성이 높아 OCR을 돌리지 않는다.
+            // 이 트랙을 "스캔 완료"로 표시하지 않아 다음 틱에 다른 프레임으로 재시도된다.
+            const colorInfo = classifyPlateColor(imageData);
+            if (!colorInfo.color) {
+                this._scannedTrackIds.delete(vehicle.trackId);
+                debugLogger.log('[번호판조회] 번호판 영역 아님으로 판단, OCR 생략');
+                this.onStatus?.('스캔 중');
+                return;
+            }
+
+            this.onStatus?.('번호판 인식 중...');
             const text = await this.ocr.recognize(cropCanvas);
             const match = findMatch(text, this.plateList);
 
             if (match) {
-                debugLogger.log(`[번호판조회] 매칭: "${text.trim()}" → ${match.plate} (${match.matchType})`);
+                match.colorLabel = colorInfo.label;
+                debugLogger.log(`[번호판조회] 매칭: "${text.trim()}" → ${match.plate} (${match.matchType}, ${colorInfo.label})`);
                 const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.7);
                 this.onMatch?.(match, cropDataUrl);
             } else {
