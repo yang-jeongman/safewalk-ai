@@ -162,7 +162,11 @@ export class PlateScanManager {
         } else {
             color = 'rgba(0, 224, 255, 0.85)';
             lineWidth = 2.5;
-            label = '번호판을 프레임 안에 맞춰주세요';
+            // 실측(2026-09-19): 성공/실패를 가른 결정적 차이는 "차가 프레임에
+            // 들어왔는가"가 아니라 "번호판 자체가 프레임을 꽉 채웠는가"였다 —
+            // 번호판이 작게 찍힌 시도는 전부 실패, 프레임 가득 채운 시도만 성공.
+            // 안내 문구를 그에 맞게 더 구체적으로 바꿈.
+            label = '번호판이 프레임을 꽉 채우도록 가까이 다가가주세요';
         }
 
         this.drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth);
