@@ -22,6 +22,9 @@ export class PlateScanManager {
         this.isScanning = false;
         this.tickIntervalMs = 400; // 보행 안전용(300ms)보다 느슨 — 실시간 위험 대응이 아니라 순찰 스캔용
         this._timer = null;
+        this._animFrameId = null;
+        this._lastTracked = []; // 오버레이 애니메이션용 — detect()는 400ms마다만, 그리기는 매 프레임
+        this._activeOcrTrackId = null; // 지금 인식 중인 차량(펄스 표시용)
 
         // 트랙ID별로 한 번만 OCR — 같은 정차/서행 차량을 매 프레임 재스캔하지 않는다
         this._scannedTrackIds = new Set();
@@ -80,6 +83,14 @@ export class PlateScanManager {
         this._scannedTrackIds.clear();
         this.tracker.reset();
         this._timer = setInterval(() => this.tick(), this.tickIntervalMs);
+        // 오버레이는 detect() 주기(400ms)와 별개로 매 프레임 다시 그려서 펄스 애니메이션이
+        // 부드럽게 움직이게 한다 (iOS 카메라의 QR 인식 프레임 효과 참고, 사용자 요청 2026-09-19).
+        const animate = () => {
+            if (!this.isScanning) return;
+            this.drawOverlay(this._lastTracked);
+            this._animFrameId = requestAnimationFrame(animate);
+        };
+        this._animFrameId = requestAnimationFrame(animate);
     }
 
     stop() {
@@ -87,6 +98,10 @@ export class PlateScanManager {
         if (this._timer) {
             clearInterval(this._timer);
             this._timer = null;
+        }
+        if (this._animFrameId) {
+            cancelAnimationFrame(this._animFrameId);
+            this._animFrameId = null;
         }
         if (this.video && this.video.srcObject) {
             this.video.srcObject.getTracks().forEach(t => t.stop());
@@ -101,12 +116,10 @@ export class PlateScanManager {
 
         const predictions = await this.model.detect(this.video);
         const vehicles = predictions.filter(p => VEHICLE_CLASSES.has(p.class));
-        const tracked = this.tracker.update(vehicles);
-
-        this.drawOverlay(tracked);
+        this._lastTracked = this.tracker.update(vehicles);
 
         if (!this._ocrInFlight) {
-            const candidate = tracked.find(t => !this._scannedTrackIds.has(t.trackId));
+            const candidate = this._lastTracked.find(t => !this._scannedTrackIds.has(t.trackId));
             if (candidate) {
                 this._scannedTrackIds.add(candidate.trackId);
                 this.runOcr(candidate);
@@ -114,16 +127,58 @@ export class PlateScanManager {
         }
     }
 
+    // 모서리 브래킷("뷰파인더") 스타일 — QR 스캐너처럼 네 귀퉁이만 그려서 카메라가
+    // 지금 그 차량을 "잡고 있다"는 느낌을 준다. 상태별로 색/펄스를 다르게 한다:
+    //   대기 중(회색) → 인식 중(노란색, 펄스) → 완료(초록색)
+    drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth) {
+        const ctx = this.ctx;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = 'round';
+        const corners = [
+            [[x, y + bracketLen], [x, y], [x + bracketLen, y]],
+            [[x + w - bracketLen, y], [x + w, y], [x + w, y + bracketLen]],
+            [[x, y + h - bracketLen], [x, y + h], [x + bracketLen, y + h]],
+            [[x + w - bracketLen, y + h], [x + w, y + h], [x + w, y + h - bracketLen]]
+        ];
+        for (const pts of corners) {
+            ctx.beginPath();
+            ctx.moveTo(pts[0][0], pts[0][1]);
+            ctx.lineTo(pts[1][0], pts[1][1]);
+            ctx.lineTo(pts[2][0], pts[2][1]);
+            ctx.stroke();
+        }
+    }
+
     drawOverlay(tracked) {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.strokeStyle = '#00e0ff';
-        this.ctx.lineWidth = 2;
-        this.ctx.font = '16px sans-serif';
-        this.ctx.fillStyle = '#00e0ff';
+        this.ctx.font = '14px sans-serif';
+
         for (const t of tracked) {
             const [x, y, w, h] = t.bbox;
-            this.ctx.strokeRect(x, y, w, h);
-            const label = this._scannedTrackIds.has(t.trackId) ? '조회 완료' : '대기 중';
+            const bracketLen = Math.min(w, h) * 0.22;
+            const isActive = t.trackId === this._activeOcrTrackId;
+            const isDone = this._scannedTrackIds.has(t.trackId) && !isActive;
+
+            let color, label, lineWidth;
+            if (isActive) {
+                // 펄스: 400~1000ms 주기로 굵기/투명도가 오가며 "지금 읽는 중"을 강조
+                const pulse = (Math.sin(performance.now() / 180) + 1) / 2; // 0~1
+                lineWidth = 2 + pulse * 2.5;
+                color = `rgba(255, 210, 0, ${0.6 + pulse * 0.4})`;
+                label = '인식 중...';
+            } else if (isDone) {
+                color = '#4CAF50';
+                label = '완료';
+                lineWidth = 2;
+            } else {
+                color = 'rgba(0, 224, 255, 0.7)';
+                label = '대기 중';
+                lineWidth = 2;
+            }
+
+            this.drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth);
+            this.ctx.fillStyle = color;
             this.ctx.fillText(label, x, y > 16 ? y - 4 : y + h + 16);
         }
     }
@@ -153,6 +208,7 @@ export class PlateScanManager {
 
     async runOcr(vehicle) {
         this._ocrInFlight = true;
+        this._activeOcrTrackId = vehicle.trackId;
         this.onStatus?.('번호판 위치 확인 중...');
         try {
             const cropCanvas = this.cropPlateRegion(vehicle.bbox);
@@ -195,6 +251,7 @@ export class PlateScanManager {
             this.onStatus?.('스캔 중');
         } finally {
             this._ocrInFlight = false;
+            this._activeOcrTrackId = null;
         }
     }
 }

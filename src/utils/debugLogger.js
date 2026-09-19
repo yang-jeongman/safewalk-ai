@@ -66,6 +66,26 @@ class DebugLogger {
     clear() {
         if (this.listEl) this.listEl.innerHTML = '';
     }
+
+    // 화면에 보이는 로그(최대 MAX_LOGS줄)를 텍스트 파일로 내보낸다 — 실기기에서
+    // 재현된 문제를 스크린샷 대신 텍스트로 그대로 전달할 방법이 없다는 피드백(2026-09-19)
+    // 대응. 원격 디버깅 없이 로그를 공유할 유일한 방법이라 다운로드로 처리한다.
+    exportAsText() {
+        if (!this.listEl || this.listEl.children.length === 0) {
+            return { count: 0 };
+        }
+        const lines = Array.from(this.listEl.children).map(el => el.textContent);
+        const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `safewalk-debug-log-${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return { count: lines.length };
+    }
 }
 
 export const debugLogger = new DebugLogger();

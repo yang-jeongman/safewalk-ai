@@ -682,6 +682,12 @@ body {
     font-size: 14px;
 }
 
+.plate-test-log-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
 /* 반응형 */
 @media (min-width: 768px) {
     .main-content {

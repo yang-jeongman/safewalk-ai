@@ -7,6 +7,7 @@ import { debugLogger } from '../utils/debugLogger.js';
 import { exportUnknownObjectQueue } from '../utils/unknownObjectExporter.js';
 import { PlateScanManager } from '../plate/plateScanManager.js';
 import { parsePlateCsv } from '../plate/plateMatcher.js';
+import { exportPlateTestLog } from '../plate/plateTestLogExporter.js';
 
 class SafeWalkApp {
     constructor() {
@@ -114,6 +115,12 @@ class SafeWalkApp {
             } finally {
                 btn.disabled = false;
             }
+        });
+        document.getElementById('btnDebugLogExport').addEventListener('click', () => {
+            const { count } = debugLogger.exportAsText();
+            debugLogger.log(count > 0
+                ? `[디버그] 로그 ${count}줄을 텍스트 파일로 내보냈습니다`
+                : '[디버그] 내보낼 로그가 없습니다');
         });
 
         // 뒤로 가기 버튼
@@ -343,6 +350,23 @@ class SafeWalkApp {
             btnClearTestLog.addEventListener('click', async () => {
                 await this.dataManager.clearTestLogNow();
                 this.refreshPlateTestLog();
+            });
+        }
+
+        const btnExportTestLog = document.getElementById('btnPlateTestLogExport');
+        if (btnExportTestLog) {
+            btnExportTestLog.addEventListener('click', async (e) => {
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                try {
+                    const entries = await this.dataManager.getTestLogForToday();
+                    const { count } = await exportPlateTestLog(entries);
+                    debugLogger.log(count > 0
+                        ? `[번호판조회] 오늘 기록 ${count}건을 ZIP으로 내보냈습니다`
+                        : '[번호판조회] 내보낼 오늘 기록이 없습니다');
+                } finally {
+                    btn.disabled = false;
+                }
             });
         }
     }
