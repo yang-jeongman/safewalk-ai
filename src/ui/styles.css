@@ -656,6 +656,44 @@ body {
     color: var(--text-light);
 }
 
+.plate-capture-result {
+    background: white;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+
+.plate-capture-text {
+    font-size: 20px;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+}
+
+.plate-capture-color {
+    font-size: 13px;
+    color: var(--text-light);
+    margin-top: 2px;
+}
+
+.plate-capture-match {
+    color: var(--danger);
+    font-weight: 600;
+    margin-top: 8px;
+}
+
+.plate-capture-nomatch {
+    color: var(--text-light);
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.plate-capture-warning {
+    color: var(--warning);
+    font-size: 13px;
+    margin-top: 6px;
+}
+
 .plate-test-log-item {
     display: flex;
     align-items: center;

@@ -1,60 +1,58 @@
-// 번호판 조회 모드 — 카메라 + COCO-SSD(차량 클래스만) 루프.
+// 번호판 조회 모드 — 카메라 + 수동 조준 캡처.
 // 보행 안전용 DetectionManager(motionGate/poleGate/추적기가 서로 촘촘히 얽혀
 // 이미 실기기에서 튜닝된 상태)는 건드리지 않고, 완전히 별도의 가벼운 엔진으로
 // 분리한다 — 이 모드의 버그가 보행 안전 기능에 영향을 줄 수 없게 하기 위함.
-import { ObjectTracker } from '../detection/objectTracker.js';
+//
+// 상호작용 방식 변경 이력(2026-09-19): 원래는 COCO-SSD로 차량을 자동 감지해
+// 걸으면서 매 차량마다 자동으로 번호판을 크롭·인식했다. 실측(정차 차량 30장,
+// 실제 도보 854장)에서 두 가지가 드러났다: (1) OCR 전처리 자체가 부실해서
+// 크롭이 정확해도 결과가 엉망이었음(plateOcr.js에서 수정) — 그리고 그걸 고친
+// 뒤에도 (2) "차량 박스 하단 40%"라는 고정 비율 크롭이 실제 도보 중 다양한
+// 각도·거리에서는 번호판을 자주 놓쳤다. 고정식 번호판 인식기들이 카메라를
+// 고정해두는 이유와 같은 문제라, 자동 감지를 걷어내고 실제 CCTV/스캐너 앱들처럼
+// "사용자가 직접 프레임에 번호판을 맞추고 확인 버튼을 누르는" 방식으로 바꿨다.
+// 인식률이 실측으로 검증되면 자동 스캔을 다시 검토하기로 함.
 import { PlateOcr } from './plateOcr.js';
 import { findMatch, normalizePlate } from './plateMatcher.js';
 import { classifyPlateColor } from './plateColor.js';
 import { estimateSharpness } from '../detection/sharpness.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
-const VEHICLE_CLASSES = new Set(['car', 'truck', 'bus']);
-
 export class PlateScanManager {
     constructor() {
         this.video = null;
         this.canvas = null;
         this.ctx = null;
-        this.model = null;
         this.ocr = null;
-        this.tracker = new ObjectTracker();
 
-        this.isScanning = false;
-        this.tickIntervalMs = 400; // 보행 안전용(300ms)보다 느슨 — 실시간 위험 대응이 아니라 순찰 스캔용
-        this._timer = null;
+        this.isActive = false; // 카메라가 켜져 가이드 프레임을 그리고 있는지
         this._animFrameId = null;
-        this._lastTracked = []; // 오버레이 애니메이션용 — detect()는 400ms마다만, 그리기는 매 프레임
-        this._activeOcrTrackId = null; // 지금 인식 중인 차량(펄스 표시용)
+        this._capturing = false;
 
-        // 트랙ID별로 한 번만 OCR — 같은 정차/서행 차량을 매 프레임 재스캔하지 않는다
-        this._scannedTrackIds = new Set();
-        this._ocrInFlight = false;
+        // 가이드 프레임 — 번호판 근사 비율(신형 8자리 단일행 기준 약 2.8:1)로 화면
+        // 중앙에 고정 표시. 정확한 크기가 아니라 "이 안에 번호판을 맞추라"는 조준
+        // 보조선일 뿐이라 여유를 두고 약간 넓게 잡았다.
+        this.guideAspectRatio = 2.8;
+        this.guideWidthFraction = 0.82;
 
-        // 진단용 주기 로그(보행 안전 모드의 "[성능] stage1=..." 패턴과 동일한 목적).
-        // 실측(2026-09-19): 스캔은 켜져 있었는데 차량 감지가 전혀 없었던 구간이 있었지만,
-        // 매칭/색상판정처럼 "뭔가 인식 시도가 있었을 때만" 로그가 찍혀서 그 원인이
-        // "차량 자체를 못 봤다"인지 "봤는데 번호판만 못 읽었다"인지 구분이 안 됐다.
-        // COCO-SSD가 매 틱 몇 대를 보고 있는지 주기적으로 남겨 그 둘을 구분할 수 있게 한다.
-        this._lastDiagLogTime = 0;
-        this.diagLogIntervalMs = 4000;
-
-        // 실측(2026-09-19, 실제 보행 중 촬영본 854건): 많은 크롭이 사실 번호판이 아니라
-        // 보도블럭·벽면·흐린(모션블러) 장면이었는데도 색상 사전검증(흰색 등)을 통과해
-        // OCR이 낭비됐다. 번호판은 글자 때문에 에지(명암 대비)가 많은데, 빈 노면/벽/
-        // 블러 사진은 에지가 거의 없다 — 미지 객체 큐에 이미 쓰던 분산-오브-라플라시안
-        // 선명도 측정을 재사용해 "번호판스러운 글자 대비가 있는지"까지 같이 거른다.
-        // 임계값은 아직 번호판 크롭 기준으로 보정된 적 없는 시작값 — 다음 실측 필요.
+        // 흐린 사진 경고용 기준선 — 아직 번호판 크롭 기준으로 실측 보정된 적 없는
+        // 시작값(미지 객체 큐의 값과 동일 계열 방식만 재사용). 자동 스캔 때와 달리
+        // 여기선 결과를 무조건 보여주고 "흐릴 수 있음"만 경고한다(차단하지 않음) —
+        // 사용자가 직접 조준한 캡처라 결과를 숨기는 것보다 보여주고 판단을 맡기는
+        // 게 낫다고 판단.
         this.minPlateCropSharpness = 60;
 
         this.plateList = []; // dataManager.getPlateList()에서 로드된 정규화된 목록
         this.onMatch = null; // (match, cropDataUrl) => void — 매칭된 건만 호출됨
         this.onStatus = null; // (text) => void — 화면 상태 텍스트 업데이트용
 
-        // 정확도 테스트 로그용 — 매칭 여부와 무관하게 "번호판다운 영역에서 OCR을
-        // 시도했다"는 사실마다 호출됨. app.js가 옵트인 설정을 보고 실제 기록 여부를
-        // 결정한다 (기본은 아무 데도 저장 안 함 — 이 콜백을 아무도 구독 안 하면 끝).
+        // 정확도 테스트 로그용 — 매칭 여부와 무관하게 캡처마다 호출됨. app.js가
+        // 옵트인 설정을 보고 실제 기록 여부를 결정한다.
         this.onRecognized = null; // ({ text, colorLabel, cropDataUrl }) => void
+
+        // 캡처 직후 화면에 "인식됨: XXX" 즉시 피드백을 주기 위한 콜백 — 매칭 여부와
+        // 무관하게, 그리고 저장 여부와도 무관하게 매 캡처마다 호출된다.
+        this.onCaptureResult = null; // ({ text, rawText, match, colorLabel, sharpness, cropDataUrl }) => void
     }
 
     setPlateList(list) {
@@ -68,10 +66,8 @@ export class PlateScanManager {
 
         await this.setupCamera();
 
-        debugLogger.log('[번호판조회] AI 모델 로딩 중...');
-        this.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-
         this.ocr = new PlateOcr();
+        debugLogger.log('[번호판조회] OCR 모델 로딩 중...');
         await this.ocr.load();
         debugLogger.log('[번호판조회] 초기화 완료');
     }
@@ -96,26 +92,17 @@ export class PlateScanManager {
     }
 
     start() {
-        this.isScanning = true;
-        this._scannedTrackIds.clear();
-        this.tracker.reset();
-        this._timer = setInterval(() => this.tick(), this.tickIntervalMs);
-        // 오버레이는 detect() 주기(400ms)와 별개로 매 프레임 다시 그려서 펄스 애니메이션이
-        // 부드럽게 움직이게 한다 (iOS 카메라의 QR 인식 프레임 효과 참고, 사용자 요청 2026-09-19).
+        this.isActive = true;
         const animate = () => {
-            if (!this.isScanning) return;
-            this.drawOverlay(this._lastTracked);
+            if (!this.isActive) return;
+            this.drawGuideFrame();
             this._animFrameId = requestAnimationFrame(animate);
         };
         this._animFrameId = requestAnimationFrame(animate);
     }
 
     stop() {
-        this.isScanning = false;
-        if (this._timer) {
-            clearInterval(this._timer);
-            this._timer = null;
-        }
+        this.isActive = false;
         if (this._animFrameId) {
             cancelAnimationFrame(this._animFrameId);
             this._animFrameId = null;
@@ -128,34 +115,19 @@ export class PlateScanManager {
         if (this.ocr) this.ocr.dispose();
     }
 
-    async tick() {
-        if (!this.isScanning) return;
-
-        const predictions = await this.model.detect(this.video);
-        const vehicles = predictions.filter(p => VEHICLE_CLASSES.has(p.class));
-        this._lastTracked = this.tracker.update(vehicles);
-
-        const now = performance.now();
-        if (now - this._lastDiagLogTime >= this.diagLogIntervalMs) {
-            this._lastDiagLogTime = now;
-            // 차량 클래스 전체(vehicles.length)가 아니라 COCO-SSD가 이번 틱에 뭐든
-            // 찾긴 했는지(predictions.length)까지 같이 남긴다 — "카메라/모델 자체는
-            // 살아있는데 차량만 안 잡히는지" vs "이 틱 자체가 통째로 비었는지" 구분용.
-            debugLogger.log(`[번호판조회] 진단: 전체감지=${predictions.length}, 차량=${vehicles.length}`);
-        }
-
-        if (!this._ocrInFlight) {
-            const candidate = this._lastTracked.find(t => !this._scannedTrackIds.has(t.trackId));
-            if (candidate) {
-                this._scannedTrackIds.add(candidate.trackId);
-                this.runOcr(candidate);
-            }
-        }
+    // 캔버스는 video와 같은 네이티브 해상도로 맞춰져 있고 둘 다 동일한 CSS
+    // object-fit:cover로 표시되므로, 캔버스 네이티브 좌표에서 그린 사각형이 화면에
+    // 보이는 위치와 캡처 시 crop할 video 영역이 좌표계가 그대로 일치한다 —
+    // 화면 표시 좌표 ↔ 영상 원본 좌표 변환이 따로 필요 없다.
+    getGuideRect() {
+        const w = this.canvas.width * this.guideWidthFraction;
+        const h = w / this.guideAspectRatio;
+        const x = (this.canvas.width - w) / 2;
+        const y = (this.canvas.height - h) / 2;
+        return { x, y, w, h };
     }
 
-    // 모서리 브래킷("뷰파인더") 스타일 — QR 스캐너처럼 네 귀퉁이만 그려서 카메라가
-    // 지금 그 차량을 "잡고 있다"는 느낌을 준다. 상태별로 색/펄스를 다르게 한다:
-    //   대기 중(회색) → 인식 중(노란색, 펄스) → 완료(초록색)
+    // 모서리 브래킷("뷰파인더") 스타일 — QR 스캐너처럼 네 귀퉁이만 그린다.
     drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth) {
         const ctx = this.ctx;
         ctx.strokeStyle = color;
@@ -176,54 +148,33 @@ export class PlateScanManager {
         }
     }
 
-    drawOverlay(tracked) {
+    drawGuideFrame() {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        this.ctx.font = '14px sans-serif';
+        const { x, y, w, h } = this.getGuideRect();
+        const bracketLen = Math.min(w, h) * 0.16;
 
-        for (const t of tracked) {
-            const [x, y, w, h] = t.bbox;
-            const bracketLen = Math.min(w, h) * 0.22;
-            const isActive = t.trackId === this._activeOcrTrackId;
-            const isDone = this._scannedTrackIds.has(t.trackId) && !isActive;
-
-            let color, label, lineWidth;
-            if (isActive) {
-                // 펄스: 400~1000ms 주기로 굵기/투명도가 오가며 "지금 읽는 중"을 강조
-                const pulse = (Math.sin(performance.now() / 180) + 1) / 2; // 0~1
-                lineWidth = 2 + pulse * 2.5;
-                color = `rgba(255, 210, 0, ${0.6 + pulse * 0.4})`;
-                label = '인식 중...';
-            } else if (isDone) {
-                color = '#4CAF50';
-                label = '완료';
-                lineWidth = 2;
-            } else {
-                color = 'rgba(0, 224, 255, 0.7)';
-                label = '대기 중';
-                lineWidth = 2;
-            }
-
-            this.drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth);
-            this.ctx.fillStyle = color;
-            this.ctx.fillText(label, x, y > 16 ? y - 4 : y + h + 16);
+        let color, lineWidth, label;
+        if (this._capturing) {
+            const pulse = (Math.sin(performance.now() / 150) + 1) / 2;
+            color = `rgba(255, 210, 0, ${0.6 + pulse * 0.4})`;
+            lineWidth = 2 + pulse * 2.5;
+            label = '인식 중...';
+        } else {
+            color = 'rgba(0, 224, 255, 0.85)';
+            lineWidth = 2.5;
+            label = '번호판을 프레임 안에 맞춰주세요';
         }
+
+        this.drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth);
+        this.ctx.font = '15px sans-serif';
+        this.ctx.fillStyle = color;
+        this.ctx.fillText(label, x, y > 20 ? y - 8 : y + h + 20);
     }
 
-    // 차량 bbox 하단부(번호판이 있을 가능성이 높은 영역)를 크롭해 OCR 해상도로 확대.
-    // 각도/거리에 따라 부정확할 수 있는 휴리스틱 — 실기기 검증 전까지 정확도 보장 안 함.
-    //
-    // 실측(2026-09-19): 이 크롭 자체는 대부분 번호판을 정확히 잡았다(30장 중 다수가
-    // 육안으로 선명) — 문제는 크롭이 아니라 그 다음 OCR 단계였다(plateOcr.js 참고).
-    // 다만 확대 보간 방식은 OCR엔 맞지 않았다: nearest-neighbor는 신호등 색 판정처럼
-    // "원래 색을 안 섞는" 용도엔 맞지만, 글자 인식에는 매끈한 보간이 훨씬 유리해서
-    // smoothing을 켰다.
-    cropPlateRegion(bbox) {
-        const [x, y, w, h] = bbox;
-        const cropY = y + h * 0.6;
-        const cropH = h * 0.4;
-
-        const outW = 320;
-        const outH = Math.max(1, Math.round(outW * (cropH / w)));
+    cropGuideRegion() {
+        const { x, y, w, h } = this.getGuideRect();
+        const outW = 400;
+        const outH = Math.max(1, Math.round(outW * (h / w)));
 
         const canvas = document.createElement('canvas');
         canvas.width = outW;
@@ -231,71 +182,53 @@ export class PlateScanManager {
         const ctx = canvas.getContext('2d');
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(
-            this.video,
-            Math.max(0, x), Math.max(0, cropY), w, cropH,
-            0, 0, outW, outH
-        );
+        ctx.drawImage(this.video, x, y, w, h, 0, 0, outW, outH);
         return canvas;
     }
 
-    async runOcr(vehicle) {
-        this._ocrInFlight = true;
-        this._activeOcrTrackId = vehicle.trackId;
-        this.onStatus?.('번호판 위치 확인 중...');
+    // 사용자가 "번호판 인식" 버튼을 눌렀을 때만 호출된다 — 자동 감지/루프 없음.
+    async capture() {
+        if (this._capturing || !this.ocr) return null;
+        this._capturing = true;
+        this.onStatus?.('번호판 인식 중...');
         try {
-            const cropCanvas = this.cropPlateRegion(vehicle.bbox);
+            const cropCanvas = this.cropGuideRegion();
             const cropCtx = cropCanvas.getContext('2d');
             const imageData = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
 
-            // 번호판 특유의 단색 배경(흰/파랑/노랑/연두/주황/감청)인지 먼저 확인 —
-            // 아니면 범퍼·그릴 등 엉뚱한 영역일 가능성이 높아 OCR을 돌리지 않는다.
-            // 이 트랙을 "스캔 완료"로 표시하지 않아 다음 틱에 다른 프레임으로 재시도된다.
             const colorInfo = classifyPlateColor(imageData);
-            if (!colorInfo.color) {
-                this._scannedTrackIds.delete(vehicle.trackId);
-                debugLogger.log('[번호판조회] 번호판 영역 아님으로 판단, OCR 생략');
-                this.onStatus?.('스캔 중');
-                return;
-            }
-
-            // 색은 맞아도 글자 대비(에지)가 거의 없으면 번호판이 아니라 빈 노면/벽/
-            // 블러 사진일 가능성이 높다 — OCR 낭비를 막는다(실측 2026-09-19 근거는
-            // 위 minPlateCropSharpness 주석 참고).
             const sharpness = estimateSharpness(imageData);
-            if (sharpness < this.minPlateCropSharpness) {
-                this._scannedTrackIds.delete(vehicle.trackId);
-                debugLogger.log(`[번호판조회] 대비 부족(선명도=${sharpness.toFixed(0)})으로 OCR 생략`);
-                this.onStatus?.('스캔 중');
-                return;
-            }
+            const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.8);
 
-            this.onStatus?.('번호판 인식 중...');
-            const text = await this.ocr.recognize(cropCanvas);
-            const match = findMatch(text, this.plateList);
-            // 매칭 결과와 무관하게 크롭은 한 번만 만들어 두 콜백이 같이 쓴다
-            // (onMatch는 CSV 매칭 시에만, onRecognized는 정확도 테스트 옵트인 시에만
-            // 실제로 저장으로 이어진다 — 호출 자체는 항상 일어나지만 저장 여부는 app.js가 결정)
-            const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.7);
+            const rawText = await this.ocr.recognize(cropCanvas);
+            const normalizedText = normalizePlate(rawText);
+            const match = findMatch(rawText, this.plateList);
+
+            const result = {
+                text: normalizedText,
+                rawText: rawText.trim(),
+                match,
+                colorLabel: colorInfo.label,
+                sharpness,
+                cropDataUrl
+            };
 
             if (match) {
                 match.colorLabel = colorInfo.label;
-                debugLogger.log(`[번호판조회] 매칭: "${text.trim()}" → ${match.plate} (${match.matchType}, ${colorInfo.label})`);
+                debugLogger.log(`[번호판조회] 매칭: "${rawText.trim()}" → ${match.plate} (${match.matchType})`);
                 this.onMatch?.(match, cropDataUrl);
             } else {
-                // 매칭 안 된 차량 — CSV 목록(체납차량 매칭 기록)에는 절대 안 들어간다.
-                // 다만 정확도 테스트 로그는 사용자가 명시적으로 켰을 때만 별도로 남는다
-                // (당일 한정, 자정 자동삭제 — dataManager.saveTestLogEntry 참고).
-                debugLogger.log('[번호판조회] 매칭 없음 (체납차량 기록엔 저장 안 함)');
+                debugLogger.log(`[번호판조회] 인식 결과: "${normalizedText || '(비어있음)'}" (매칭 없음, 선명도=${sharpness.toFixed(0)})`);
             }
-            this.onRecognized?.({ text: normalizePlate(text), colorLabel: colorInfo.label, cropDataUrl });
-            this.onStatus?.('스캔 중');
+            this.onRecognized?.({ text: normalizedText, colorLabel: colorInfo.label, cropDataUrl });
+            this.onCaptureResult?.(result);
+            return result;
         } catch (err) {
-            debugLogger.log(`[번호판조회] OCR 실패: ${err}`);
-            this.onStatus?.('스캔 중');
+            debugLogger.log(`[번호판조회] 인식 실패: ${err}`);
+            return null;
         } finally {
-            this._ocrInFlight = false;
-            this._activeOcrTrackId = null;
+            this._capturing = false;
+            this.onStatus?.('대기 중');
         }
     }
 }

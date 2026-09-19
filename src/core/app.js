@@ -344,6 +344,11 @@ class SafeWalkApp {
             btnStop.addEventListener('click', () => this.stopPlateScanning());
         }
 
+        const btnCapture = document.getElementById('btnPlateCapture');
+        if (btnCapture) {
+            btnCapture.addEventListener('click', () => this.capturePlate());
+        }
+
         const btnClearLog = document.getElementById('btnPlateScanClearLog');
         if (btnClearLog) {
             btnClearLog.addEventListener('click', async () => {
@@ -438,7 +443,8 @@ class SafeWalkApp {
         if (this._plateScanInitInFlight) return;
         if (this.plateScanManager) {
             this.plateScanManager.start();
-            this.uiController.updatePlateScanStatus('스캔 중');
+            this.uiController.updatePlateScanStatus('준비됨 — 번호판을 프레임에 맞춘 뒤 인식 버튼을 누르세요');
+            this.uiController.setPlateCaptureEnabled(true);
             return;
         }
 
@@ -450,6 +456,7 @@ class SafeWalkApp {
             manager.onMatch = (match, cropDataUrl) => this.handlePlateMatch(match, cropDataUrl);
             manager.onStatus = (text) => this.uiController.updatePlateScanStatus(text);
             manager.onRecognized = (rec) => this.handlePlateRecognized(rec);
+            manager.onCaptureResult = (result) => this.uiController.showPlateCaptureResult(result);
             await manager.init();
 
             if (this._plateScanStopRequested) {
@@ -464,7 +471,8 @@ class SafeWalkApp {
             this.plateScanManager = manager;
             this.plateScanReady = true;
             manager.start();
-            this.uiController.updatePlateScanStatus('스캔 중');
+            this.uiController.updatePlateScanStatus('준비됨 — 번호판을 프레임에 맞춘 뒤 인식 버튼을 누르세요');
+            this.uiController.setPlateCaptureEnabled(true);
         } catch (err) {
             debugLogger.log(`[번호판조회] 시작 실패: ${err}`);
             this.uiController.showAlert('카메라를 시작할 수 없습니다', 'error');
@@ -481,6 +489,12 @@ class SafeWalkApp {
             this.plateScanReady = false;
         }
         this.uiController.updatePlateScanStatus('중지됨');
+        this.uiController.setPlateCaptureEnabled(false);
+    }
+
+    async capturePlate() {
+        if (!this.plateScanManager) return;
+        await this.plateScanManager.capture();
     }
 
     async handlePlateMatch(match, cropDataUrl) {

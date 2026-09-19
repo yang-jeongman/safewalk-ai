@@ -297,6 +297,34 @@ export class UIController {
         if (el) el.textContent = text;
     }
 
+    setPlateCaptureEnabled(enabled) {
+        const btn = document.getElementById('btnPlateCapture');
+        if (btn) btn.disabled = !enabled;
+    }
+
+    // 수동 캡처 직후 즉시 피드백 — 매칭 여부와 무관하게 매 캡처마다 호출된다.
+    // "인식됨: XXX" 처럼 바로 보여줘서, 정확도 테스트 로그를 나중에 열어보지 않아도
+    // 그 자리에서 결과를 확인할 수 있게 한다(사용자 요청: "폰에서 결과를 볼 수 없다").
+    showPlateCaptureResult(result) {
+        const el = document.getElementById('plateCaptureResult');
+        if (!el) return;
+        el.hidden = false;
+
+        const blurWarning = result.sharpness < 60
+            ? '<div class="plate-capture-warning">사진이 흐릴 수 있습니다 — 더 가까이, 정면에서 다시 시도해보세요</div>'
+            : '';
+        const matchLine = result.match
+            ? `<div class="plate-capture-match">⚠️ 체납차량 매칭: ${result.match.plate}</div>`
+            : '<div class="plate-capture-nomatch">목록에 없음</div>';
+
+        el.innerHTML = `
+            <div class="plate-capture-text">인식됨: ${result.text || '(읽지 못함)'}</div>
+            ${result.colorLabel ? `<div class="plate-capture-color">${result.colorLabel}</div>` : ''}
+            ${matchLine}
+            ${blurWarning}
+        `;
+    }
+
     // 매칭 발생 시 화면 배너 — 음성/진동은 app.js가 warningSystem으로 별도 처리
     showPlateMatchAlert(match) {
         const zone = document.getElementById('plateAlertZone');
