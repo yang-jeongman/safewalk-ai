@@ -6,6 +6,7 @@ import { ObjectTracker } from '../detection/objectTracker.js';
 import { PlateOcr } from './plateOcr.js';
 import { findMatch, normalizePlate } from './plateMatcher.js';
 import { classifyPlateColor } from './plateColor.js';
+import { estimateSharpness } from '../detection/sharpness.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 const VEHICLE_CLASSES = new Set(['car', 'truck', 'bus']);
@@ -37,6 +38,14 @@ export class PlateScanManager {
         // COCO-SSD가 매 틱 몇 대를 보고 있는지 주기적으로 남겨 그 둘을 구분할 수 있게 한다.
         this._lastDiagLogTime = 0;
         this.diagLogIntervalMs = 4000;
+
+        // 실측(2026-09-19, 실제 보행 중 촬영본 854건): 많은 크롭이 사실 번호판이 아니라
+        // 보도블럭·벽면·흐린(모션블러) 장면이었는데도 색상 사전검증(흰색 등)을 통과해
+        // OCR이 낭비됐다. 번호판은 글자 때문에 에지(명암 대비)가 많은데, 빈 노면/벽/
+        // 블러 사진은 에지가 거의 없다 — 미지 객체 큐에 이미 쓰던 분산-오브-라플라시안
+        // 선명도 측정을 재사용해 "번호판스러운 글자 대비가 있는지"까지 같이 거른다.
+        // 임계값은 아직 번호판 크롭 기준으로 보정된 적 없는 시작값 — 다음 실측 필요.
+        this.minPlateCropSharpness = 60;
 
         this.plateList = []; // dataManager.getPlateList()에서 로드된 정규화된 목록
         this.onMatch = null; // (match, cropDataUrl) => void — 매칭된 건만 호출됨
@@ -202,6 +211,12 @@ export class PlateScanManager {
 
     // 차량 bbox 하단부(번호판이 있을 가능성이 높은 영역)를 크롭해 OCR 해상도로 확대.
     // 각도/거리에 따라 부정확할 수 있는 휴리스틱 — 실기기 검증 전까지 정확도 보장 안 함.
+    //
+    // 실측(2026-09-19): 이 크롭 자체는 대부분 번호판을 정확히 잡았다(30장 중 다수가
+    // 육안으로 선명) — 문제는 크롭이 아니라 그 다음 OCR 단계였다(plateOcr.js 참고).
+    // 다만 확대 보간 방식은 OCR엔 맞지 않았다: nearest-neighbor는 신호등 색 판정처럼
+    // "원래 색을 안 섞는" 용도엔 맞지만, 글자 인식에는 매끈한 보간이 훨씬 유리해서
+    // smoothing을 켰다.
     cropPlateRegion(bbox) {
         const [x, y, w, h] = bbox;
         const cropY = y + h * 0.6;
@@ -214,7 +229,8 @@ export class PlateScanManager {
         canvas.width = outW;
         canvas.height = outH;
         const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = false;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(
             this.video,
             Math.max(0, x), Math.max(0, cropY), w, cropH,
@@ -239,6 +255,17 @@ export class PlateScanManager {
             if (!colorInfo.color) {
                 this._scannedTrackIds.delete(vehicle.trackId);
                 debugLogger.log('[번호판조회] 번호판 영역 아님으로 판단, OCR 생략');
+                this.onStatus?.('스캔 중');
+                return;
+            }
+
+            // 색은 맞아도 글자 대비(에지)가 거의 없으면 번호판이 아니라 빈 노면/벽/
+            // 블러 사진일 가능성이 높다 — OCR 낭비를 막는다(실측 2026-09-19 근거는
+            // 위 minPlateCropSharpness 주석 참고).
+            const sharpness = estimateSharpness(imageData);
+            if (sharpness < this.minPlateCropSharpness) {
+                this._scannedTrackIds.delete(vehicle.trackId);
+                debugLogger.log(`[번호판조회] 대비 부족(선명도=${sharpness.toFixed(0)})으로 OCR 생략`);
                 this.onStatus?.('스캔 중');
                 return;
             }

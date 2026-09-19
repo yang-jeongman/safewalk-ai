@@ -63,7 +63,11 @@ export async function buildZipAsync(files) {
         const lv = new DataView(localHeader);
         writeUint32LE(lv, 0, 0x04034b50);
         writeUint16LE(lv, 4, 20);
-        writeUint16LE(lv, 6, 0);
+        // 일반 목적 비트 플래그 bit 11(0x0800) = 파일명이 UTF-8이라는 표시(EFS).
+        // 이게 없으면 한글 파일명이 압축 해제 프로그램의 시스템 코드페이지(한글
+        // 윈도우면 CP949)로 잘못 해석돼 깨져 보인다 — 실사용자가 보낸 ZIP에서 실제로
+        // 확인된 문제(2026-09-19).
+        writeUint16LE(lv, 6, 0x0800);
         writeUint16LE(lv, 8, 0);
         writeUint16LE(lv, 10, 0);
         writeUint16LE(lv, 12, 0);
@@ -88,7 +92,7 @@ export async function buildZipAsync(files) {
         writeUint32LE(cv, 0, 0x02014b50);
         writeUint16LE(cv, 4, 20);
         writeUint16LE(cv, 6, 20);
-        writeUint16LE(cv, 8, 0);
+        writeUint16LE(cv, 8, 0x0800); // 로컬 헤더와 동일 — UTF-8 파일명 플래그(EFS)
         writeUint16LE(cv, 10, 0);
         writeUint16LE(cv, 12, 0);
         writeUint16LE(cv, 14, 0);
