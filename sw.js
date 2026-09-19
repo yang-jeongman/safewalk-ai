@@ -24,6 +24,7 @@ const urlsToCache = [
     './src/plate/plateOcr.js',
     './src/plate/plateMatcher.js',
     './src/plate/plateColor.js',
+    './src/plate/plateLocator.js',
     './src/plate/plateTestLogExporter.js',
     './data/known-objects-gallery.json',
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0',

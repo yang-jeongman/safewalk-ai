@@ -16,6 +16,7 @@ import { PlateOcr } from './plateOcr.js';
 import { findMatch, normalizePlate } from './plateMatcher.js';
 import { classifyPlateColor } from './plateColor.js';
 import { estimateSharpness } from '../detection/sharpness.js';
+import { locatePlateRegion } from './plateLocator.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 export class PlateScanManager {
@@ -34,6 +35,16 @@ export class PlateScanManager {
         // 보조선일 뿐이라 여유를 두고 약간 넓게 잡았다.
         this.guideAspectRatio = 2.8;
         this.guideWidthFraction = 0.82;
+
+        // 실시간 번호판 위치 추적 — 아이폰 QR 촬영처럼 프레임이 번호판을 "따라가게"
+        // 해달라는 요청(2026-09-19)에 대응. plateLocator.js는 OpenCV 없이 순수
+        // Canvas 2D로 짠 휴리스틱(에지 밀도 기반)이라 QR 검출만큼 정확하다는 보장은
+        // 없다 — 그래서 최종 캡처는 여전히 사용자가 직접 확인하고 누르게 남겨둔다.
+        // 못 찾으면 서서히 기본 중앙 프레임으로 되돌아온다(어색하게 멈춰있지 않도록).
+        this.trackedRect = null; // 현재 화면에 보이는(스무딩된) 가이드 프레임, null=기본값
+        this._lastFoundTime = 0;
+        this._locateTimer = null;
+        this.locateIntervalMs = 300; // 매 프레임 돌리기엔 무거워서 샘플링
 
         // 흐린 사진 경고용 기준선 — 아직 번호판 크롭 기준으로 실측 보정된 적 없는
         // 시작값(미지 객체 큐의 값과 동일 계열 방식만 재사용). 자동 스캔 때와 달리
@@ -93,12 +104,19 @@ export class PlateScanManager {
 
     start() {
         this.isActive = true;
+        this.trackedRect = null;
+        this._lastFoundTime = 0;
         const animate = () => {
             if (!this.isActive) return;
             this.drawGuideFrame();
             this._animFrameId = requestAnimationFrame(animate);
         };
         this._animFrameId = requestAnimationFrame(animate);
+
+        this._locateTimer = setInterval(() => {
+            if (this._capturing) return; // 캡처 중엔 탐지 건너뛰기 — 리소스 낭비 방지
+            this.updateTrackedRect();
+        }, this.locateIntervalMs);
     }
 
     stop() {
@@ -107,6 +125,11 @@ export class PlateScanManager {
             cancelAnimationFrame(this._animFrameId);
             this._animFrameId = null;
         }
+        if (this._locateTimer) {
+            clearInterval(this._locateTimer);
+            this._locateTimer = null;
+        }
+        this.trackedRect = null;
         if (this.video && this.video.srcObject) {
             this.video.srcObject.getTracks().forEach(t => t.stop());
             this.video.srcObject = null;
@@ -115,16 +138,60 @@ export class PlateScanManager {
         if (this.ocr) this.ocr.dispose();
     }
 
+    // 매 locateIntervalMs마다 호출 — plateLocator로 후보를 찾으면 그쪽으로 부드럽게
+    // 이동(스무딩), 한동안 못 찾으면 기본 중앙 프레임으로 서서히 복귀한다.
+    updateTrackedRect() {
+        const found = locatePlateRegion(this.video);
+        const now = performance.now();
+
+        if (found) {
+            this._lastFoundTime = now;
+            if (!this.trackedRect) {
+                this.trackedRect = { ...found };
+            } else {
+                const alpha = 0.35;
+                this.trackedRect = {
+                    x: this.trackedRect.x + (found.x - this.trackedRect.x) * alpha,
+                    y: this.trackedRect.y + (found.y - this.trackedRect.y) * alpha,
+                    w: this.trackedRect.w + (found.w - this.trackedRect.w) * alpha,
+                    h: this.trackedRect.h + (found.h - this.trackedRect.h) * alpha
+                };
+            }
+            return;
+        }
+
+        if (this.trackedRect && now - this._lastFoundTime > 1500) {
+            const target = this.getDefaultGuideRect();
+            const alpha = 0.12;
+            this.trackedRect = {
+                x: this.trackedRect.x + (target.x - this.trackedRect.x) * alpha,
+                y: this.trackedRect.y + (target.y - this.trackedRect.y) * alpha,
+                w: this.trackedRect.w + (target.w - this.trackedRect.w) * alpha,
+                h: this.trackedRect.h + (target.h - this.trackedRect.h) * alpha
+            };
+            if (Math.abs(this.trackedRect.w - target.w) < 2 && Math.abs(this.trackedRect.x - target.x) < 2) {
+                this.trackedRect = null; // 기본값에 충분히 가까워지면 완전히 리셋
+            }
+        }
+    }
+
     // 캔버스는 video와 같은 네이티브 해상도로 맞춰져 있고 둘 다 동일한 CSS
     // object-fit:cover로 표시되므로, 캔버스 네이티브 좌표에서 그린 사각형이 화면에
     // 보이는 위치와 캡처 시 crop할 video 영역이 좌표계가 그대로 일치한다 —
     // 화면 표시 좌표 ↔ 영상 원본 좌표 변환이 따로 필요 없다.
-    getGuideRect() {
+    getDefaultGuideRect() {
         const w = this.canvas.width * this.guideWidthFraction;
         const h = w / this.guideAspectRatio;
         const x = (this.canvas.width - w) / 2;
         const y = (this.canvas.height - h) / 2;
         return { x, y, w, h };
+    }
+
+    // 실시간 추적된 위치가 있으면 그걸, 없으면(아직 못 찾았거나 카메라 막 켜짐) 기본
+    // 중앙 프레임을 쓴다. drawGuideFrame()과 cropGuideRegion() 둘 다 이걸 통해서만
+    // 프레임 위치를 얻으므로, 화면에 보이는 프레임과 실제 캡처되는 영역이 항상 일치한다.
+    getGuideRect() {
+        return this.trackedRect || this.getDefaultGuideRect();
     }
 
     // 모서리 브래킷("뷰파인더") 스타일 — QR 스캐너처럼 네 귀퉁이만 그린다.
@@ -159,6 +226,12 @@ export class PlateScanManager {
             color = `rgba(255, 210, 0, ${0.6 + pulse * 0.4})`;
             lineWidth = 2 + pulse * 2.5;
             label = '인식 중...';
+        } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500) {
+            // 번호판으로 추정되는 위치를 프레임이 따라가고 있는 상태 — QR 스캐너가
+            // 코드를 찾아 프레임을 맞추는 것과 같은 피드백(사용자 요청 2026-09-19)
+            color = 'rgba(76, 175, 80, 0.9)';
+            lineWidth = 2.5;
+            label = '번호판 위치에 맞춰졌습니다 — 확인 후 눌러주세요';
         } else {
             color = 'rgba(0, 224, 255, 0.85)';
             lineWidth = 2.5;
