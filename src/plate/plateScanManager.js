@@ -30,6 +30,14 @@ export class PlateScanManager {
         this._scannedTrackIds = new Set();
         this._ocrInFlight = false;
 
+        // 진단용 주기 로그(보행 안전 모드의 "[성능] stage1=..." 패턴과 동일한 목적).
+        // 실측(2026-09-19): 스캔은 켜져 있었는데 차량 감지가 전혀 없었던 구간이 있었지만,
+        // 매칭/색상판정처럼 "뭔가 인식 시도가 있었을 때만" 로그가 찍혀서 그 원인이
+        // "차량 자체를 못 봤다"인지 "봤는데 번호판만 못 읽었다"인지 구분이 안 됐다.
+        // COCO-SSD가 매 틱 몇 대를 보고 있는지 주기적으로 남겨 그 둘을 구분할 수 있게 한다.
+        this._lastDiagLogTime = 0;
+        this.diagLogIntervalMs = 4000;
+
         this.plateList = []; // dataManager.getPlateList()에서 로드된 정규화된 목록
         this.onMatch = null; // (match, cropDataUrl) => void — 매칭된 건만 호출됨
         this.onStatus = null; // (text) => void — 화면 상태 텍스트 업데이트용
@@ -117,6 +125,15 @@ export class PlateScanManager {
         const predictions = await this.model.detect(this.video);
         const vehicles = predictions.filter(p => VEHICLE_CLASSES.has(p.class));
         this._lastTracked = this.tracker.update(vehicles);
+
+        const now = performance.now();
+        if (now - this._lastDiagLogTime >= this.diagLogIntervalMs) {
+            this._lastDiagLogTime = now;
+            // 차량 클래스 전체(vehicles.length)가 아니라 COCO-SSD가 이번 틱에 뭐든
+            // 찾긴 했는지(predictions.length)까지 같이 남긴다 — "카메라/모델 자체는
+            // 살아있는데 차량만 안 잡히는지" vs "이 틱 자체가 통째로 비었는지" 구분용.
+            debugLogger.log(`[번호판조회] 진단: 전체감지=${predictions.length}, 차량=${vehicles.length}`);
+        }
 
         if (!this._ocrInFlight) {
             const candidate = this._lastTracked.find(t => !this._scannedTrackIds.has(t.trackId));
