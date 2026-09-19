@@ -26,6 +26,8 @@ class SafeWalkApp {
         // 번호판 조회 모드 (관리자 도구) — 보행 안전 기능과 독립적인 별도 엔진
         this.plateScanManager = null;
         this.plateScanReady = false;
+        this._plateScanInitInFlight = false; // 중복 시작 방지
+        this._plateScanStopRequested = false; // 초기화 도중 정지 요청됐는지 (레이스 방지)
     }
 
     async init() {
@@ -176,11 +178,26 @@ class SafeWalkApp {
         this.uiController.switchScreen('walking');
         this.uiController.updateStatus('walking', { status: 'active' });
 
-        // 카메라 및 탐지 시작
+        // 카메라 및 탐지 시작.
+        // 실측(2026-09-19)에서 드러난 버그: init()이 카메라 권한+모델 로딩 때문에
+        // 몇 초씩 걸리는데, 그 사이 사용자가 "정지"를 눌러 stopWalking()이 먼저 돌면
+        // this.detectionManager가 null로 비워진다. 그 뒤 init()이 뒤늦게 끝나
+        // this.detectionManager.onDetection에 대입하려는 순간
+        // "Cannot set properties of null"로 죽었다 — this.detectionManager를 곧장
+        // 쓰지 않고 지역변수에 담아뒀다가, 그래도 여전히 걷는 중일 때만 앱 상태에 반영한다.
         try {
             debugLogger.log('[카메라] DetectionManager 초기화 시작');
-            this.detectionManager = new DetectionManager();
-            await this.detectionManager.init();
+            const manager = new DetectionManager();
+            await manager.init();
+
+            if (!this.isWalking) {
+                // 초기화하는 동안 이미 정지됨 — 방금 켠 카메라를 바로 해제하고 끝낸다
+                manager.stop();
+                debugLogger.log('[카메라] 초기화 도중 정지되어 카메라를 바로 해제했습니다');
+                return;
+            }
+
+            this.detectionManager = manager;
             debugLogger.log('[카메라] 초기화 완료 (모델 로드 + getUserMedia 성공)');
 
             // 탐지 콜백 설정
@@ -414,28 +431,50 @@ class SafeWalkApp {
         }
     }
 
+    // startWalking()과 같은 종류의 레이스가 여기도 있었다 — init() 도중 stopPlateScanning()이
+    // 불리면 this.plateScanManager가 null이 된 뒤 init()이 뒤늦게 끝나면서 null에 접근해 죽는다.
+    // 지역변수로 들고 있다가, 그래도 여전히 스캔 요청 상태일 때만 앱 상태에 반영한다.
     async startPlateScanning() {
+        if (this._plateScanInitInFlight) return;
+        if (this.plateScanManager) {
+            this.plateScanManager.start();
+            this.uiController.updatePlateScanStatus('스캔 중');
+            return;
+        }
+
+        this._plateScanInitInFlight = true;
+        this._plateScanStopRequested = false;
         this.uiController.updatePlateScanStatus('카메라/모델 준비 중...');
         try {
-            if (!this.plateScanManager) {
-                this.plateScanManager = new PlateScanManager();
-                this.plateScanManager.onMatch = (match, cropDataUrl) => this.handlePlateMatch(match, cropDataUrl);
-                this.plateScanManager.onStatus = (text) => this.uiController.updatePlateScanStatus(text);
-                this.plateScanManager.onRecognized = (rec) => this.handlePlateRecognized(rec);
-                await this.plateScanManager.init();
-                const list = await this.dataManager.getPlateList();
-                this.plateScanManager.setPlateList(list);
-                this.plateScanReady = true;
+            const manager = new PlateScanManager();
+            manager.onMatch = (match, cropDataUrl) => this.handlePlateMatch(match, cropDataUrl);
+            manager.onStatus = (text) => this.uiController.updatePlateScanStatus(text);
+            manager.onRecognized = (rec) => this.handlePlateRecognized(rec);
+            await manager.init();
+
+            if (this._plateScanStopRequested) {
+                manager.stop();
+                debugLogger.log('[번호판조회] 초기화 도중 정지되어 카메라를 바로 해제했습니다');
+                this.uiController.updatePlateScanStatus('중지됨');
+                return;
             }
-            this.plateScanManager.start();
+
+            const list = await this.dataManager.getPlateList();
+            manager.setPlateList(list);
+            this.plateScanManager = manager;
+            this.plateScanReady = true;
+            manager.start();
             this.uiController.updatePlateScanStatus('스캔 중');
         } catch (err) {
             debugLogger.log(`[번호판조회] 시작 실패: ${err}`);
             this.uiController.showAlert('카메라를 시작할 수 없습니다', 'error');
+        } finally {
+            this._plateScanInitInFlight = false;
         }
     }
 
     stopPlateScanning() {
+        this._plateScanStopRequested = true;
         if (this.plateScanManager) {
             this.plateScanManager.stop();
             this.plateScanManager = null;
