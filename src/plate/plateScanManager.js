@@ -151,36 +151,59 @@ export class PlateScanManager {
     // 매 locateIntervalMs마다 호출 — plateLocator로 후보를 찾으면 그쪽으로 부드럽게
     // 이동(스무딩), 한동안 못 찾으면 기본 중앙 프레임으로 서서히 복귀한다.
     //
-    // 실측(2026-09-19, 실기기): "초록 프레임이 여기저기로 계속 튀는" 문제가 보고됨 —
-    // poleGate.js에서 이미 겪은 것과 같은 원인이다. 매 샘플의 "최고 점수 후보"를
-    // 바로 신뢰하면, 그릴 무늬·보닛 등 점수가 비슷한 다른 후보로 프레임마다 옮겨갈
-    // 수 있다. poleGate와 같은 해법(연속 프레임에서 비슷한 위치여야 실제로 인정)을
-    // 적용한다 — 후보가 나와도 바로 이동하지 않고, 이전 후보와 겹치는 위치에서
-    // 2번 연속 나와야("streak") 비로소 그쪽으로 스무딩을 시작한다.
+    // 실측(2026-09-19, 실기기) 2차: "스크린샷과 달리 프레임이 붙는 시간은 잠깐이고
+    // 계속 다른 위치를 찾아 다닌다" — 1차 수정(새 후보끼리 2연속 일치해야 인정)은
+    // 절반만 고쳤다. 문제는 그 비교 대상이 "직전 후보"였지 "지금 추적 중인 자리"가
+    // 아니었다는 점이다: 이미 번호판에 잘 붙어 있어도, 보닛 무늬 같은 엉뚱한 후보가
+    // 우연히 2번 연속 나오면 바로 거기로 끌려갔다 — 한 번 자리 잡은 추적에 "관성"이
+    // 없었다. 그래서 지금 추적 중인 자리 근처에서 또 찾았으면(같은 대상을 계속 보고
+    // 있는 것) streak 없이 바로 미세 보정만 하고, 그 자리에서 한동안 못 찾을 때만
+    // "새 후보 인수" 절차(2연속 확인)를 거치도록 나눴다.
     updateTrackedRect() {
         const found = locatePlateRegion(this.video);
         const now = performance.now();
 
         if (found) {
-            const overlapsPending = this._pendingCandidate &&
-                Math.abs(found.x - this._pendingCandidate.x) < found.w * 0.5 &&
-                Math.abs(found.y - this._pendingCandidate.y) < found.h * 0.5;
+            const nearCurrentTrack = this.trackedRect &&
+                Math.abs(found.x - this.trackedRect.x) < this.trackedRect.w * 0.5 &&
+                Math.abs(found.y - this.trackedRect.y) < this.trackedRect.h * 0.5;
 
-            this._pendingStreak = overlapsPending ? (this._pendingStreak + 1) : 1;
-            this._pendingCandidate = found;
-
-            if (this._pendingStreak >= 2) {
+            if (nearCurrentTrack) {
+                // 이미 잡고 있던 대상을 계속 보고 있음 — 관성 유지, 잡음성 후보에
+                // 넘어가지 않도록 "새 후보 인수" 상태도 여기서 리셋한다.
+                this._pendingCandidate = null;
+                this._pendingStreak = 0;
                 this._lastFoundTime = now;
-                if (!this.trackedRect) {
-                    this.trackedRect = { ...found };
-                } else {
-                    const alpha = 0.35;
-                    this.trackedRect = {
-                        x: this.trackedRect.x + (found.x - this.trackedRect.x) * alpha,
-                        y: this.trackedRect.y + (found.y - this.trackedRect.y) * alpha,
-                        w: this.trackedRect.w + (found.w - this.trackedRect.w) * alpha,
-                        h: this.trackedRect.h + (found.h - this.trackedRect.h) * alpha
-                    };
+                const alpha = 0.3;
+                this.trackedRect = {
+                    x: this.trackedRect.x + (found.x - this.trackedRect.x) * alpha,
+                    y: this.trackedRect.y + (found.y - this.trackedRect.y) * alpha,
+                    w: this.trackedRect.w + (found.w - this.trackedRect.w) * alpha,
+                    h: this.trackedRect.h + (found.h - this.trackedRect.h) * alpha
+                };
+            } else {
+                // 지금 추적 중인 곳과 다른(또는 아직 아무것도 안 잡은) 새 위치 —
+                // 최소 2번 연속 같은 새 위치로 나와야 "진짜 새 후보"로 인정한다.
+                const overlapsPending = this._pendingCandidate &&
+                    Math.abs(found.x - this._pendingCandidate.x) < found.w * 0.5 &&
+                    Math.abs(found.y - this._pendingCandidate.y) < found.h * 0.5;
+
+                this._pendingStreak = overlapsPending ? (this._pendingStreak + 1) : 1;
+                this._pendingCandidate = found;
+
+                if (this._pendingStreak >= 2) {
+                    this._lastFoundTime = now;
+                    if (!this.trackedRect) {
+                        this.trackedRect = { ...found };
+                    } else {
+                        const alpha = 0.35;
+                        this.trackedRect = {
+                            x: this.trackedRect.x + (found.x - this.trackedRect.x) * alpha,
+                            y: this.trackedRect.y + (found.y - this.trackedRect.y) * alpha,
+                            w: this.trackedRect.w + (found.w - this.trackedRect.w) * alpha,
+                            h: this.trackedRect.h + (found.h - this.trackedRect.h) * alpha
+                        };
+                    }
                 }
             }
         } else {
@@ -302,9 +325,29 @@ export class PlateScanManager {
         }
 
         this.drawCornerBrackets(x, y, w, h, color, bracketLen, lineWidth);
-        this.ctx.font = '15px sans-serif';
+        this.drawGuideLabel(label, x, y, w, h, color);
+    }
+
+    // 안내 문구가 너무 작다는 실기기 피드백(2026-09-19) 대응. 캔버스는 화면 CSS
+    // 크기가 아니라 카메라 네이티브 해상도(보통 1280px 폭)로 그려지는데, 고정 픽셀
+    // 폰트를 쓰면 화면에 표시될 때(CSS로 축소) 실제로는 훨씬 작게 보인다 — 캔버스
+    // 내부 해상도 대 실제 표시 크기(clientWidth) 비율로 폰트를 환산해서, 기기·화면
+    // 크기와 무관하게 화면상 일정한 글자 크기(약 18px 상당)가 나오게 한다.
+    drawGuideLabel(label, x, y, w, h, color) {
+        const displayScale = this.canvas.width / (this.canvas.clientWidth || this.canvas.width);
+        const fontSize = Math.round(18 * displayScale);
+        this.ctx.font = `bold ${fontSize}px sans-serif`;
+
+        const textY = y > fontSize + 14 ? y - 10 : y + h + fontSize + 6;
+        const metrics = this.ctx.measureText(label);
+        const padding = fontSize * 0.4;
+
+        // 어떤 배경(그릴, 도로 등) 위에서도 읽히도록 반투명 검정 배경을 깐다
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        this.ctx.fillRect(x - padding, textY - fontSize, metrics.width + padding * 2, fontSize + padding);
+
         this.ctx.fillStyle = color;
-        this.ctx.fillText(label, x, y > 20 ? y - 8 : y + h + 20);
+        this.ctx.fillText(label, x, textY);
     }
 
     cropGuideRegion() {
