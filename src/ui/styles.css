@@ -726,6 +726,51 @@ body {
     margin-top: 10px;
 }
 
+/* 다운로드 준비 배너 — 비동기 내보내기 후 사용자가 직접 눌러야 하는 진짜 링크
+   (iOS Safari 자동 다운로드 차단 대응, uiController.presentDownload 참고) */
+.download-ready-banner {
+    position: fixed;
+    bottom: 24px;
+    left: 16px;
+    right: 16px;
+    max-width: 420px;
+    margin: 0 auto;
+    background: #212121;
+    color: white;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    z-index: 10001;
+    font-size: 14px;
+}
+
+.download-ready-banner span {
+    flex: 1;
+}
+
+.download-ready-link {
+    background: var(--primary);
+    color: white;
+    text-decoration: none;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.download-ready-close {
+    background: none;
+    border: none;
+    color: white;
+    opacity: 0.7;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px;
+}
+
 /* 반응형 */
 @media (min-width: 768px) {
     .main-content {

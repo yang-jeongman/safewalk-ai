@@ -110,19 +110,23 @@ class SafeWalkApp {
             btn.disabled = true;
             debugLogger.log('[오픈셋] 미지 객체 내보내는 중...');
             try {
-                const { count } = await exportUnknownObjectQueue();
-                debugLogger.log(count > 0
-                    ? `[오픈셋] 미지 객체 ${count}개를 ZIP으로 내보냈습니다`
-                    : '[오픈셋] 내보낼 미지 객체가 없습니다 (큐가 비어있음)');
+                const { count, blob, filename } = await exportUnknownObjectQueue();
+                if (count > 0) {
+                    this.uiController.presentDownload(blob, filename, `미지 객체 ${count}개 ZIP 준비됨`);
+                } else {
+                    debugLogger.log('[오픈셋] 내보낼 미지 객체가 없습니다 (큐가 비어있음)');
+                }
             } finally {
                 btn.disabled = false;
             }
         });
         document.getElementById('btnDebugLogExport').addEventListener('click', () => {
-            const { count } = debugLogger.exportAsText();
-            debugLogger.log(count > 0
-                ? `[디버그] 로그 ${count}줄을 텍스트 파일로 내보냈습니다`
-                : '[디버그] 내보낼 로그가 없습니다');
+            const { count, blob, filename } = debugLogger.exportAsText();
+            if (count > 0) {
+                this.uiController.presentDownload(blob, filename, `로그 ${count}줄 준비됨`);
+            } else {
+                debugLogger.log('[디버그] 내보낼 로그가 없습니다');
+            }
         });
 
         // 뒤로 가기 버튼
@@ -382,10 +386,12 @@ class SafeWalkApp {
                 btn.disabled = true;
                 try {
                     const entries = await this.dataManager.getTestLogForToday();
-                    const { count } = await exportPlateTestLog(entries);
-                    debugLogger.log(count > 0
-                        ? `[번호판조회] 오늘 기록 ${count}건을 ZIP으로 내보냈습니다`
-                        : '[번호판조회] 내보낼 오늘 기록이 없습니다');
+                    const { count, blob, filename } = await exportPlateTestLog(entries);
+                    if (count > 0) {
+                        this.uiController.presentDownload(blob, filename, `오늘 기록 ${count}건 ZIP 준비됨`);
+                    } else {
+                        debugLogger.log('[번호판조회] 내보낼 오늘 기록이 없습니다');
+                    }
                 } finally {
                     btn.disabled = false;
                 }

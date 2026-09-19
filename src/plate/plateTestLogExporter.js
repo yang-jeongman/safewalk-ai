@@ -2,7 +2,7 @@
 // 실패/오류를 스크린샷 대신 크롭 이미지+텍스트로 그대로 전달할 방법이 없다는
 // 피드백(2026-09-19) 대응. 오직 사용자가 직접 옵트인해서 쌓은 "오늘" 데이터만
 // 대상이고, 버튼을 눌러야만 내보내진다 — 자동 업로드/전송은 여전히 없다.
-import { dataUrlToBytes, yieldToMain, downloadFilesAsZip } from '../utils/zipWriter.js';
+import { dataUrlToBytes, yieldToMain, buildZipAsync } from '../utils/zipWriter.js';
 
 export async function exportPlateTestLog(entries) {
     if (!entries || entries.length === 0) {
@@ -33,6 +33,6 @@ export async function exportPlateTestLog(entries) {
         bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2))
     });
 
-    await downloadFilesAsZip(files, `safewalk-plate-test-log-${Date.now()}.zip`);
-    return { count: entries.length };
+    const blob = await buildZipAsync(files);
+    return { count: entries.length, blob, filename: `safewalk-plate-test-log-${Date.now()}.zip` };
 }

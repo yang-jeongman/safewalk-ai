@@ -67,24 +67,20 @@ class DebugLogger {
         if (this.listEl) this.listEl.innerHTML = '';
     }
 
-    // 화면에 보이는 로그(최대 MAX_LOGS줄)를 텍스트 파일로 내보낸다 — 실기기에서
-    // 재현된 문제를 스크린샷 대신 텍스트로 그대로 전달할 방법이 없다는 피드백(2026-09-19)
-    // 대응. 원격 디버깅 없이 로그를 공유할 유일한 방법이라 다운로드로 처리한다.
+    // 화면에 보이는 로그(최대 MAX_LOGS줄)를 텍스트 Blob으로 만들어 반환한다
+    // (다운로드는 직접 트리거하지 않음). 실기기에서 재현된 문제를 스크린샷 대신
+    // 텍스트로 그대로 전달할 방법이 없다는 피드백(2026-09-19) 대응.
+    // 호출 쪽이 uiController.presentDownload()로 실제 저장 링크를 보여준다 —
+    // iOS Safari에서 비동기 처리 이후의 자동 다운로드가 막히는 문제 대응
+    // (zipWriter.js 상단 설명 참고. 이 함수 자체는 동기라 원래도 괜찮았을 수 있지만,
+    // 내보내기 경로를 전부 같은 방식으로 통일해 플랫폼별로 다르게 동작하지 않게 한다).
     exportAsText() {
         if (!this.listEl || this.listEl.children.length === 0) {
             return { count: 0 };
         }
         const lines = Array.from(this.listEl.children).map(el => el.textContent);
         const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `safewalk-debug-log-${Date.now()}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        return { count: lines.length };
+        return { count: lines.length, blob, filename: `safewalk-debug-log-${Date.now()}.txt` };
     }
 }
 

@@ -108,6 +108,36 @@ export class UIController {
         }, 3000);
     }
 
+    // 비동기로 만들어진 Blob(ZIP/텍스트 내보내기 등)을 실제로 저장하려면, 사용자가
+    // "지금 막 누른" 진짜 <a> 탭이어야 한다 — a.click()을 코드로 대신 호출하면
+    // iOS Safari에서 다운로드가 막힌다(실기기 확인, 2026-09-19. 이유는
+    // zipWriter.js 상단 주석 참고). 그래서 배너 안에 진짜 링크를 넣고 사용자가
+    // 직접 누르게 한다. showAlert()와 달리 수 초 만에 사라지지 않는다 —
+    // 링크를 누르기 전에 없어지면 저장할 방법이 없어지기 때문.
+    presentDownload(blob, filename, label) {
+        const url = URL.createObjectURL(blob);
+
+        const banner = document.createElement('div');
+        banner.className = 'download-ready-banner';
+        banner.innerHTML = `
+            <span>${label || '내보내기 준비됨'}</span>
+            <a href="${url}" download="${filename}" class="download-ready-link">💾 저장</a>
+            <button class="download-ready-close" aria-label="닫기">✕</button>
+        `;
+        document.body.appendChild(banner);
+
+        const cleanup = () => {
+            banner.remove();
+            URL.revokeObjectURL(url);
+        };
+
+        banner.querySelector('.download-ready-close').addEventListener('click', cleanup);
+        // 저장 링크를 누르면 브라우저가 다운로드를 시작할 시간을 잠깐 준 뒤 정리한다
+        banner.querySelector('.download-ready-link').addEventListener('click', () => {
+            setTimeout(cleanup, 1500);
+        });
+    }
+
     // 신호등 색 전용 배너 문구 — warningSystem.generateMessage()의 음성 안내와
     // 동일한 문구를 화면에도 보여준다. 해당 없으면 null.
     describeTrafficLight(threat) {

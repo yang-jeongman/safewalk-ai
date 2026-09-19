@@ -1,6 +1,14 @@
 // 순수 클라이언트 ZIP 작성기 (외부 라이브러리 없음) — 원래 unknownObjectExporter.js에
 // 있던 걸 공용으로 뽑아냈다. 서버 없이 내보내기 기능이 필요한 곳(미지 객체 큐,
 // 번호판 테스트 로그 등)에서 공통으로 쓴다.
+//
+// 이 파일은 Blob만 만들고 다운로드는 트리거하지 않는다 — 실기기 확인(2026-09-19,
+// iOS): buildZipAsync는 청크마다 메인 스레드를 양보(await)하는데, 그 뒤에
+// a.click()을 자동으로 호출하면 iOS Safari가 "이건 더 이상 사용자 제스처가 아니다"로
+// 판단해 다운로드를 막는다(팝업 차단과 같은 원리). 그래서 여기선 Blob만 반환하고,
+// 실제 저장은 그 Blob이 준비된 뒤 사용자가 직접 누르는 진짜 <a> 링크로
+// 처리한다(uiController.presentDownload 참고) — 그래야 매 플랫폼에서 항상 "방금 누른
+// 진짜 탭"으로 인식된다.
 
 const CRC_TABLE = (() => {
     const table = new Uint32Array(256);
@@ -127,15 +135,3 @@ export async function buildZipAsync(files) {
     return new Blob(chunks, { type: 'application/zip' });
 }
 
-// files({name, bytes})를 ZIP으로 묶어 바로 다운로드시킨다.
-export async function downloadFilesAsZip(files, filename) {
-    const blob = await buildZipAsync(files);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-}

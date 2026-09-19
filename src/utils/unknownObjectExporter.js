@@ -2,11 +2,14 @@
 // 서버/토큰 없이 순수 클라이언트에서 ZIP을 만들어 다운로드시킨다 — 사용자가
 // 그 파일을 직접 GitHub Issue에 첨부해서 수동으로 라벨링 큐에 올리는 흐름.
 // 공개 레포 JS에 쓰기 토큰을 넣지 않기 위한 의도적 선택.
-import { dataUrlToBytes, yieldToMain, downloadFilesAsZip } from './zipWriter.js';
+import { dataUrlToBytes, yieldToMain, buildZipAsync } from './zipWriter.js';
 
 let exportInProgress = false;
 
-// 로컬 큐(localStorage 'unknownObjectQueue')를 ZIP으로 묶어 다운로드시킨다.
+// 로컬 큐(localStorage 'unknownObjectQueue')를 ZIP Blob으로 묶어서 반환한다
+// (다운로드는 직접 트리거하지 않음 — zipWriter.js 상단 설명 참고, iOS에서 자동
+// 다운로드가 막히는 문제 대응). 호출 쪽이 uiController.presentDownload()로 실제
+// 저장 링크를 보여준다.
 // 이미지 파일 + manifest.json(카테고리/점수/시각) 포함 — 사용자가 GitHub Issue에
 // 수동으로 첨부해서 라벨링 큐에 올리는 용도.
 // 비동기: 탐지 루프를 막지 않도록 청크 단위로 메인 스레드를 양보한다 (zipWriter.js 참고).
@@ -47,9 +50,9 @@ export async function exportUnknownObjectQueue() {
             bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2))
         });
 
-        await downloadFilesAsZip(files, `safewalk-unknown-objects-${Date.now()}.zip`);
+        const blob = await buildZipAsync(files);
 
-        return { count: queue.length };
+        return { count: queue.length, blob, filename: `safewalk-unknown-objects-${Date.now()}.zip` };
     } finally {
         exportInProgress = false;
     }
