@@ -45,6 +45,8 @@ export class PlateScanManager {
         this._lastFoundTime = 0;
         this._locateTimer = null;
         this.locateIntervalMs = 300; // 매 프레임 돌리기엔 무거워서 샘플링
+        this._pendingCandidate = null; // 위치 연속성 확인용 (poleGate.js와 같은 패턴)
+        this._pendingStreak = 0;
 
         // 흐린 사진 경고용 기준선 — 아직 번호판 크롭 기준으로 실측 보정된 적 없는
         // 시작값(미지 객체 큐의 값과 동일 계열 방식만 재사용). 자동 스캔 때와 달리
@@ -52,6 +54,7 @@ export class PlateScanManager {
         // 사용자가 직접 조준한 캡처라 결과를 숨기는 것보다 보여주고 판단을 맡기는
         // 게 낫다고 판단.
         this.minPlateCropSharpness = 60;
+        this._currentSharpness = 0; // 실시간 추적 중 매 샘플마다 갱신(초록불 조건에 사용)
 
         this.plateList = []; // dataManager.getPlateList()에서 로드된 정규화된 목록
         this.onMatch = null; // (match, cropDataUrl) => void — 매칭된 건만 호출됨
@@ -106,6 +109,8 @@ export class PlateScanManager {
         this.isActive = true;
         this.trackedRect = null;
         this._lastFoundTime = 0;
+        this._pendingCandidate = null;
+        this._pendingStreak = 0;
         const animate = () => {
             if (!this.isActive) return;
             this.drawGuideFrame();
@@ -140,38 +145,69 @@ export class PlateScanManager {
 
     // 매 locateIntervalMs마다 호출 — plateLocator로 후보를 찾으면 그쪽으로 부드럽게
     // 이동(스무딩), 한동안 못 찾으면 기본 중앙 프레임으로 서서히 복귀한다.
+    //
+    // 실측(2026-09-19, 실기기): "초록 프레임이 여기저기로 계속 튀는" 문제가 보고됨 —
+    // poleGate.js에서 이미 겪은 것과 같은 원인이다. 매 샘플의 "최고 점수 후보"를
+    // 바로 신뢰하면, 그릴 무늬·보닛 등 점수가 비슷한 다른 후보로 프레임마다 옮겨갈
+    // 수 있다. poleGate와 같은 해법(연속 프레임에서 비슷한 위치여야 실제로 인정)을
+    // 적용한다 — 후보가 나와도 바로 이동하지 않고, 이전 후보와 겹치는 위치에서
+    // 2번 연속 나와야("streak") 비로소 그쪽으로 스무딩을 시작한다.
     updateTrackedRect() {
         const found = locatePlateRegion(this.video);
         const now = performance.now();
 
         if (found) {
-            this._lastFoundTime = now;
-            if (!this.trackedRect) {
-                this.trackedRect = { ...found };
-            } else {
-                const alpha = 0.35;
-                this.trackedRect = {
-                    x: this.trackedRect.x + (found.x - this.trackedRect.x) * alpha,
-                    y: this.trackedRect.y + (found.y - this.trackedRect.y) * alpha,
-                    w: this.trackedRect.w + (found.w - this.trackedRect.w) * alpha,
-                    h: this.trackedRect.h + (found.h - this.trackedRect.h) * alpha
-                };
+            const overlapsPending = this._pendingCandidate &&
+                Math.abs(found.x - this._pendingCandidate.x) < found.w * 0.5 &&
+                Math.abs(found.y - this._pendingCandidate.y) < found.h * 0.5;
+
+            this._pendingStreak = overlapsPending ? (this._pendingStreak + 1) : 1;
+            this._pendingCandidate = found;
+
+            if (this._pendingStreak >= 2) {
+                this._lastFoundTime = now;
+                if (!this.trackedRect) {
+                    this.trackedRect = { ...found };
+                } else {
+                    const alpha = 0.35;
+                    this.trackedRect = {
+                        x: this.trackedRect.x + (found.x - this.trackedRect.x) * alpha,
+                        y: this.trackedRect.y + (found.y - this.trackedRect.y) * alpha,
+                        w: this.trackedRect.w + (found.w - this.trackedRect.w) * alpha,
+                        h: this.trackedRect.h + (found.h - this.trackedRect.h) * alpha
+                    };
+                }
             }
-            return;
+        } else {
+            this._pendingCandidate = null;
+            this._pendingStreak = 0;
+
+            if (this.trackedRect && now - this._lastFoundTime > 1500) {
+                const target = this.getDefaultGuideRect();
+                const alpha = 0.12;
+                this.trackedRect = {
+                    x: this.trackedRect.x + (target.x - this.trackedRect.x) * alpha,
+                    y: this.trackedRect.y + (target.y - this.trackedRect.y) * alpha,
+                    w: this.trackedRect.w + (target.w - this.trackedRect.w) * alpha,
+                    h: this.trackedRect.h + (target.h - this.trackedRect.h) * alpha
+                };
+                if (Math.abs(this.trackedRect.w - target.w) < 2 && Math.abs(this.trackedRect.x - target.x) < 2) {
+                    this.trackedRect = null; // 기본값에 충분히 가까워지면 완전히 리셋
+                }
+            }
         }
 
-        if (this.trackedRect && now - this._lastFoundTime > 1500) {
-            const target = this.getDefaultGuideRect();
-            const alpha = 0.12;
-            this.trackedRect = {
-                x: this.trackedRect.x + (target.x - this.trackedRect.x) * alpha,
-                y: this.trackedRect.y + (target.y - this.trackedRect.y) * alpha,
-                w: this.trackedRect.w + (target.w - this.trackedRect.w) * alpha,
-                h: this.trackedRect.h + (target.h - this.trackedRect.h) * alpha
-            };
-            if (Math.abs(this.trackedRect.w - target.w) < 2 && Math.abs(this.trackedRect.x - target.x) < 2) {
-                this.trackedRect = null; // 기본값에 충분히 가까워지면 완전히 리셋
-            }
+        // 실측(2026-09-19): 위치는 맞았는데도 흔들려서 인식이 안 되는 경우가 반복
+        // 보고됨. 캡처 "후"에만 흐림을 알려주면 이미 늦으므로, 매 샘플마다 현재
+        // 프레임 영역의 선명도를 같이 재서 "위치+선명도 둘 다 괜찮을 때만" 초록불이
+        // 뜨도록 한다(drawGuideFrame 참고) — 손 떨림 중엔 계속 대기 상태로 남는다.
+        try {
+            const cropCanvas = this.cropGuideRegion();
+            const cropCtx = cropCanvas.getContext('2d');
+            const imageData = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
+            this._currentSharpness = estimateSharpness(imageData);
+        } catch {
+            this._currentSharpness = 0;
         }
     }
 
@@ -226,9 +262,17 @@ export class PlateScanManager {
             color = `rgba(255, 210, 0, ${0.6 + pulse * 0.4})`;
             lineWidth = 2 + pulse * 2.5;
             label = '인식 중...';
+        } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500
+            && this._currentSharpness < this.minPlateCropSharpness) {
+            // 위치는 맞았지만 흔들려서 아직 선명하지 않음 — 초록불을 주지 않고
+            // 가만히 있으라고 안내한다(실측 2026-09-19: 위치가 맞아도 흔들려서
+            // 인식이 반복 실패하는 게 확인돼 추가).
+            color = 'rgba(255, 152, 0, 0.9)';
+            lineWidth = 2.5;
+            label = '카메라를 고정해주세요 (흔들림)';
         } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500) {
-            // 번호판으로 추정되는 위치를 프레임이 따라가고 있는 상태 — QR 스캐너가
-            // 코드를 찾아 프레임을 맞추는 것과 같은 피드백(사용자 요청 2026-09-19)
+            // 번호판으로 추정되는 위치를 프레임이 따라가고 있고, 흔들림도 없는 상태
+            // — QR 스캐너가 코드를 찾아 프레임을 맞추는 것과 같은 피드백(사용자 요청 2026-09-19)
             color = 'rgba(76, 175, 80, 0.9)';
             lineWidth = 2.5;
             label = '번호판 위치에 맞춰졌습니다 — 확인 후 눌러주세요';
