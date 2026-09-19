@@ -36,6 +36,11 @@ export class PlateScanManager {
         this.guideAspectRatio = 2.8;
         this.guideWidthFraction = 0.82;
 
+        // 추적된 프레임 폭이 이 비율보다 작으면(=번호판이 화면에서 차지하는 실제
+        // 픽셀 수가 작으면) "찾았지만 너무 멀다"로 취급한다. cropGuideRegion()의
+        // 출력 폭(400px)을 감안한 값 — 실기기 기준 보정 전 시작값.
+        this.minTrackedWidthFraction = 0.3;
+
         // 실시간 번호판 위치 추적 — 아이폰 QR 촬영처럼 프레임이 번호판을 "따라가게"
         // 해달라는 요청(2026-09-19)에 대응. plateLocator.js는 OpenCV 없이 순수
         // Canvas 2D로 짠 휴리스틱(에지 밀도 기반)이라 QR 검출만큼 정확하다는 보장은
@@ -270,9 +275,19 @@ export class PlateScanManager {
             color = 'rgba(255, 152, 0, 0.9)';
             lineWidth = 2.5;
             label = '카메라를 고정해주세요 (흔들림)';
+        } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500
+            && this.trackedRect.w < this.canvas.width * this.minTrackedWidthFraction) {
+            // 위치도 맞고 안 흔들려도, 번호판이 화면에서 차지하는 실제 픽셀 수 자체가
+            // 작으면(폰이 멀리 있으면) 400px로 확대할 때 뭉개진다 — "프레임이 붙었다"와
+            // "충분히 가까이서 찍었다"는 다른 문제. 실측(2026-09-19): 프레임이 번호판에
+            // 잘 붙었는데도 폰이 멀어서 계속 실패한 사례로 확인돼 추가.
+            color = 'rgba(0, 224, 255, 0.85)';
+            lineWidth = 2.5;
+            label = '번호판을 찾았습니다 — 조금 더 가까이 다가가주세요';
         } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500) {
-            // 번호판으로 추정되는 위치를 프레임이 따라가고 있고, 흔들림도 없는 상태
-            // — QR 스캐너가 코드를 찾아 프레임을 맞추는 것과 같은 피드백(사용자 요청 2026-09-19)
+            // 번호판으로 추정되는 위치를 프레임이 따라가고 있고, 흔들림도 없고,
+            // 충분히 가까운 상태 — QR 스캐너가 코드를 찾아 프레임을 맞추는 것과 같은
+            // 피드백(사용자 요청 2026-09-19)
             color = 'rgba(76, 175, 80, 0.9)';
             lineWidth = 2.5;
             label = '번호판 위치에 맞춰졌습니다 — 확인 후 눌러주세요';
