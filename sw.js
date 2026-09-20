@@ -1,5 +1,5 @@
 // Service Worker - 오프라인 지원 및 캐싱
-const CACHE_NAME = 'safewalk-v2';
+const CACHE_NAME = 'safewalk-v3'; // Tesseract.js → ONNX 번호판 모델 교체(2026-09-20)로 캐시 목록이 바뀌어 버전업
 const urlsToCache = [
     './',
     './index.html',
@@ -21,16 +21,21 @@ const urlsToCache = [
     './src/utils/unknownObjectExporter.js',
     './src/utils/zipWriter.js',
     './src/plate/plateScanManager.js',
-    './src/plate/plateOcr.js',
+    './src/plate/onnxModels.js',
+    './src/plate/onnxPlateDetector.js',
+    './src/plate/onnxCharacterReader.js',
     './src/plate/plateMatcher.js',
     './src/plate/plateColor.js',
-    './src/plate/plateLocator.js',
     './src/plate/plateTestLogExporter.js',
     './data/known-objects-gallery.json',
     'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0',
     'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd',
-    'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet',
-    'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
+    'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet'
+    // onnxruntime-web과 models/*.onnx(12MB+104MB)는 일부러 설치 시점 미리캐시
+    // 목록에서 뺐다 — 번호판 조회(관리자 도구)를 실제로 켠 사람만 그때 받도록.
+    // 여기 넣으면 일반 보행자 사용자도 PWA 설치 때마다 116MB를 강제로 받게 된다.
+    // 실제로 그 화면을 켜면 sw.js의 네트워크우선 fetch 핸들러가 첫 로드 후 알아서
+    // 캐시해서 다음부터는 오프라인에서도 쓸 수 있다.
 ];
 
 // 설치 이벤트
@@ -72,10 +77,15 @@ self.addEventListener('activate', (event) => {
 // 수정 중인 프로토타입 단계에는 치명적이라 네트워크 우선으로 바꾼다.
 // (완전 오프라인일 때만 캐시로 폴백 — 오프라인 지원 취지는 유지)
 self.addEventListener('fetch', (event) => {
-    const isSameOrigin = new URL(event.request.url).origin === self.location.origin;
+    const url = new URL(event.request.url);
+    const isSameOrigin = url.origin === self.location.origin;
+    const isModelWeights = url.pathname.includes('/models/') && url.pathname.endsWith('.onnx');
 
-    if (!isSameOrigin) {
-        // 외부 CDN(tfjs, coco-ssd)은 그대로 캐시 우선 유지 — 버전 고정 URL이라 안전
+    if (!isSameOrigin || isModelWeights) {
+        // 외부 CDN(tfjs, coco-ssd)과 마찬가지로 ONNX 모델 가중치(같은 출처지만 12MB+
+        // 104MB로 큼)도 캐시 우선으로 둔다 — 내용이 안 바뀌는 파일인데 번호판 조회
+        // 화면 켤 때마다 116MB를 매번 재다운로드하면 안 되므로. 모델을 바꿀 땐
+        // 파일명 자체를 바꾸는 방식으로 캐시 무효화한다.
         event.respondWith(
             caches.match(event.request).then((cached) => cached || fetch(event.request))
         );

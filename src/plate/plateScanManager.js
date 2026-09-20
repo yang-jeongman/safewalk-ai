@@ -5,18 +5,24 @@
 //
 // 상호작용 방식 변경 이력(2026-09-19): 원래는 COCO-SSD로 차량을 자동 감지해
 // 걸으면서 매 차량마다 자동으로 번호판을 크롭·인식했다. 실측(정차 차량 30장,
-// 실제 도보 854장)에서 두 가지가 드러났다: (1) OCR 전처리 자체가 부실해서
-// 크롭이 정확해도 결과가 엉망이었음(plateOcr.js에서 수정) — 그리고 그걸 고친
-// 뒤에도 (2) "차량 박스 하단 40%"라는 고정 비율 크롭이 실제 도보 중 다양한
-// 각도·거리에서는 번호판을 자주 놓쳤다. 고정식 번호판 인식기들이 카메라를
-// 고정해두는 이유와 같은 문제라, 자동 감지를 걷어내고 실제 CCTV/스캐너 앱들처럼
-// "사용자가 직접 프레임에 번호판을 맞추고 확인 버튼을 누르는" 방식으로 바꿨다.
-// 인식률이 실측으로 검증되면 자동 스캔을 다시 검토하기로 함.
-import { PlateOcr } from './plateOcr.js';
+// 실제 도보 854장)에서 "차량 박스 하단 40%"라는 고정 비율 크롭이 실제 도보 중
+// 다양한 각도·거리에서는 번호판을 자주 놓친다는 게 드러나, 자동 감지를 걷어내고
+// 실제 CCTV/스캐너 앱들처럼 "사용자가 직접 프레임에 번호판을 맞추고 확인 버튼을
+// 누르는" 방식으로 바꿨다.
+//
+// 인식 엔진 교체(2026-09-20): Tesseract.js를 AI Hub 공식 번호판 데이터셋 300장으로
+// 대규모 검증한 결과 정확 일치 2.7%에 그쳤다 — 이진화 등 전처리를 아무리 다듬어도
+// 사람 눈엔 선명한 이미지조차 잘 못 읽었고, 특히 가운데 한글 글자에서 거의 항상
+// 틀리거나 통째로 빠졌다. 촬영 조건이 아니라 범용 OCR 자체가 한국 번호판 글꼴에
+// 안 맞는다는 뜻이라 판단, 번호판 전용으로 학습된 오픈소스 모델(VRPDetectorKOR,
+// HK416, MIT License, YOLOv8 기반)로 위치 검출+글자 인식 둘 다 교체했다 —
+// onnxPlateDetector.js / onnxCharacterReader.js 참고. 이 모델도 원작자 본인이
+// "한글 인식률이 높지 않다"고 밝힌 만큼 완벽을 보장하진 않으며, 실기기 검증 필요.
 import { findMatch, normalizePlate } from './plateMatcher.js';
 import { classifyPlateColor } from './plateColor.js';
 import { estimateSharpness } from '../detection/sharpness.js';
-import { locatePlateRegion } from './plateLocator.js';
+import { OnnxPlateDetector } from './onnxPlateDetector.js';
+import { OnnxCharacterReader } from './onnxCharacterReader.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 export class PlateScanManager {
@@ -24,11 +30,13 @@ export class PlateScanManager {
         this.video = null;
         this.canvas = null;
         this.ctx = null;
-        this.ocr = null;
+        this.plateDetector = null;
+        this.characterReader = null;
 
         this.isActive = false; // 카메라가 켜져 가이드 프레임을 그리고 있는지
         this._animFrameId = null;
         this._capturing = false;
+        this._locating = false; // ONNX 위치 검출이 비동기라 겹쳐 돌지 않게 막는 플래그
 
         // 가이드 프레임 — 번호판 근사 비율(신형 8자리 단일행 기준 약 2.8:1)로 화면
         // 중앙에 고정 표시. 정확한 크기가 아니라 "이 안에 번호판을 맞추라"는 조준
@@ -85,9 +93,14 @@ export class PlateScanManager {
 
         await this.setupCamera();
 
-        this.ocr = new PlateOcr();
-        debugLogger.log('[번호판조회] OCR 모델 로딩 중...');
-        await this.ocr.load();
+        debugLogger.log('[번호판조회] 위치 검출 모델 로딩 중...');
+        this.plateDetector = new OnnxPlateDetector();
+        await this.plateDetector.load();
+
+        debugLogger.log('[번호판조회] 글자 인식 모델 로딩 중...');
+        this.characterReader = new OnnxCharacterReader();
+        await this.characterReader.load();
+
         debugLogger.log('[번호판조회] 초기화 완료');
     }
 
@@ -124,7 +137,7 @@ export class PlateScanManager {
         this._animFrameId = requestAnimationFrame(animate);
 
         this._locateTimer = setInterval(() => {
-            if (this._capturing) return; // 캡처 중엔 탐지 건너뛰기 — 리소스 낭비 방지
+            if (this._capturing || this._locating) return; // 캡처 중/추론 중이면 건너뛰기
             this.updateTrackedRect();
         }, this.locateIntervalMs);
     }
@@ -145,7 +158,8 @@ export class PlateScanManager {
             this.video.srcObject = null;
         }
         if (this.ctx) this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        if (this.ocr) this.ocr.dispose();
+        this.plateDetector?.dispose();
+        this.characterReader?.dispose();
     }
 
     // 매 locateIntervalMs마다 호출 — plateLocator로 후보를 찾으면 그쪽으로 부드럽게
@@ -159,8 +173,17 @@ export class PlateScanManager {
     // 없었다. 그래서 지금 추적 중인 자리 근처에서 또 찾았으면(같은 대상을 계속 보고
     // 있는 것) streak 없이 바로 미세 보정만 하고, 그 자리에서 한동안 못 찾을 때만
     // "새 후보 인수" 절차(2연속 확인)를 거치도록 나눴다.
-    updateTrackedRect() {
-        const found = locatePlateRegion(this.video);
+    async updateTrackedRect() {
+        this._locating = true;
+        let found;
+        try {
+            found = await this.plateDetector.detect(this.video);
+        } catch (err) {
+            debugLogger.log(`[번호판조회] 위치 검출 실패: ${err}`);
+            found = null;
+        } finally {
+            this._locating = false;
+        }
         const now = performance.now();
 
         if (found) {
@@ -366,11 +389,15 @@ export class PlateScanManager {
     }
 
     // 사용자가 "번호판 인식" 버튼을 눌렀을 때만 호출된다 — 자동 감지/루프 없음.
+    // 글자 인식은 화면에 보이는 가이드 프레임(getGuideRect()) 영역 그대로 ONNX
+    // 글자 검출 모델에 넘긴다 — 이진화 등 별도 전처리는 하지 않는다(이 모델은
+    // 원색 이미지로 학습됐음, plateOcr.js의 Tesseract 전용 전처리와는 다름).
     async capture() {
-        if (this._capturing || !this.ocr) return null;
+        if (this._capturing || !this.characterReader) return null;
         this._capturing = true;
         this.onStatus?.('번호판 인식 중...');
         try {
+            const guideRect = this.getGuideRect();
             const cropCanvas = this.cropGuideRegion();
             const cropCtx = cropCanvas.getContext('2d');
             const imageData = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
@@ -379,7 +406,7 @@ export class PlateScanManager {
             const sharpness = estimateSharpness(imageData);
             const cropDataUrl = cropCanvas.toDataURL('image/jpeg', 0.8);
 
-            const rawText = await this.ocr.recognize(cropCanvas);
+            const rawText = await this.characterReader.read(this.video, guideRect);
             const normalizedText = normalizePlate(rawText);
             const match = findMatch(rawText, this.plateList);
 
