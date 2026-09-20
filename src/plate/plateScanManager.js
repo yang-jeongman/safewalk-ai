@@ -307,11 +307,18 @@ export class PlateScanManager {
         const { x, y, w, h } = this.getGuideRect();
         const bracketLen = Math.min(w, h) * 0.16;
 
+        // 테두리가 너무 가늘어 안 보인다는 실기기 피드백(2026-09-20) — 안내 문구
+        // 폰트 크기와 같은 원인이었다: 캔버스는 카메라 네이티브 해상도(보통
+        // 1280px)로 그려지는데 화면엔 훨씬 작은 CSS 크기로 축소 표시되니, 고정
+        // 픽셀 두께가 화면에서는 실제로 1px도 안 되게 보인다. displayScale로
+        // 환산해 화면상 두께가 기기·해상도와 무관하게 일정하게 나오도록 한다.
+        const displayScale = this.canvas.width / (this.canvas.clientWidth || this.canvas.width);
+
         let color, lineWidth, label;
         if (this._capturing) {
             const pulse = (Math.sin(performance.now() / 150) + 1) / 2;
             color = `rgba(255, 210, 0, ${0.6 + pulse * 0.4})`;
-            lineWidth = 2 + pulse * 2.5;
+            lineWidth = (3 + pulse * 3) * displayScale;
             label = '인식 중...';
         } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500
             && this._currentSharpness < this.minPlateCropSharpness) {
@@ -319,7 +326,7 @@ export class PlateScanManager {
             // 가만히 있으라고 안내한다(실측 2026-09-19: 위치가 맞아도 흔들려서
             // 인식이 반복 실패하는 게 확인돼 추가).
             color = 'rgba(255, 152, 0, 0.9)';
-            lineWidth = 2.5;
+            lineWidth = 4 * displayScale;
             label = '카메라를 고정해주세요 (흔들림)';
         } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500
             && this.trackedRect.w < this.canvas.width * this.minTrackedWidthFraction) {
@@ -328,18 +335,18 @@ export class PlateScanManager {
             // "충분히 가까이서 찍었다"는 다른 문제. 실측(2026-09-19): 프레임이 번호판에
             // 잘 붙었는데도 폰이 멀어서 계속 실패한 사례로 확인돼 추가.
             color = 'rgba(0, 224, 255, 0.85)';
-            lineWidth = 2.5;
+            lineWidth = 4 * displayScale;
             label = '번호판을 찾았습니다 — 조금 더 가까이 다가가주세요';
         } else if (this.trackedRect && performance.now() - this._lastFoundTime < 1500) {
             // 번호판으로 추정되는 위치를 프레임이 따라가고 있고, 흔들림도 없고,
             // 충분히 가까운 상태 — QR 스캐너가 코드를 찾아 프레임을 맞추는 것과 같은
             // 피드백(사용자 요청 2026-09-19)
             color = 'rgba(76, 175, 80, 0.9)';
-            lineWidth = 2.5;
+            lineWidth = 4 * displayScale;
             label = '번호판 위치에 맞춰졌습니다 — 확인 후 눌러주세요';
         } else {
             color = 'rgba(0, 224, 255, 0.85)';
-            lineWidth = 2.5;
+            lineWidth = 4 * displayScale;
             // 실측(2026-09-19): 성공/실패를 가른 결정적 차이는 "차가 프레임에
             // 들어왔는가"가 아니라 "번호판 자체가 프레임을 꽉 채웠는가"였다 —
             // 번호판이 작게 찍힌 시도는 전부 실패, 프레임 가득 채운 시도만 성공.
