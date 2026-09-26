@@ -1,5 +1,6 @@
 // 경고 시스템 모듈
 import { debugLogger } from '../utils/debugLogger.js';
+import { OBJECT_NAMES } from '../utils/objectNames.js';
 
 export class WarningSystem {
     constructor() {
@@ -130,25 +131,7 @@ export class WarningSystem {
             if (trafficLightColor === 'green') return '초록불, 건너도 안전합니다';
         }
 
-        // 객체명 한글 변환
-        const objectNames = {
-            'car': '자동차',
-            'bus': '버스',
-            'truck': '트럭',
-            'motorcycle': '오토바이',
-            'bicycle': '자전거',
-            'person': '사람',
-            'traffic light': '신호등',
-            'stop sign': '정지 표지판',
-            'unknown': '정체불명의 물체', // Phase 2 open-set 인식 결과
-            'obstacle': '장애물', // 벽/기둥 등 COCO-SSD가 모르는 정면 장애물 (모션게이트 합성)
-            'pole': '기둥', // 전봇대/기둥 (기둥게이트 합성)
-            'bench': '벤치',
-            'manhole': '맨홀', // open-set 갤러리 항목 (2026-09-18)
-            'bollard': '볼라드'
-        };
-
-        const objName = objectNames[objClass] || objClass;
+        const objName = OBJECT_NAMES[objClass] || objClass;
         const distanceStr = distance < 3 ? '가까운' : `${Math.round(distance)}미터`;
 
         // 위험도에 따른 메시지

@@ -1,4 +1,6 @@
 // UI 컨트롤러 모듈
+import { OBJECT_NAMES } from '../utils/objectNames.js';
+
 export class UIController {
     constructor() {
         this.currentScreen = 'main';
@@ -25,6 +27,12 @@ export class UIController {
 
         // 관리자 도구(번호판 조회 모드) 노출 여부 — 일반 보행자 사용자에게는 기본 숨김
         this.applyAdminToolsVisibility();
+    }
+
+    // 보행 모드 종료 시 위험요소 스냅샷 패널이 열린 채로 남지 않게 닫는다.
+    hideHazardSnapshotPanel() {
+        const panel = document.getElementById('hazardSnapshotPanel');
+        if (panel) panel.hidden = true;
     }
 
     // 설정의 "관리자 도구 표시"가 꺼져 있으면 메인 화면의 번호판 조회 진입 버튼을 숨긴다.
@@ -487,11 +495,6 @@ export class UIController {
         // 자주 감지된 물체
         const objListEl = document.getElementById('reportObjectFrequency');
         if (objListEl) {
-            const objectNames = {
-                car: '자동차', bus: '버스', truck: '트럭', motorcycle: '오토바이',
-                bicycle: '자전거', person: '사람', 'traffic light': '신호등',
-                'stop sign': '정지 표지판', unknown: '정체불명의 물체'
-            };
             const entries = Object.entries(patterns?.mostFrequentObject || {})
                 .sort((a, b) => b[1] - a[1])
                 .slice(0, 8);
@@ -501,7 +504,7 @@ export class UIController {
             } else {
                 objListEl.innerHTML = entries.map(([cls, count]) => `
                     <div class="report-object-item">
-                        <span>${objectNames[cls] || cls}</span>
+                        <span>${OBJECT_NAMES[cls] || cls}</span>
                         <span>${count}회</span>
                     </div>
                 `).join('');

@@ -1,5 +1,5 @@
 // Service Worker - 오프라인 지원 및 캐싱
-const CACHE_NAME = 'safewalk-v3'; // Tesseract.js → ONNX 번호판 모델 교체(2026-09-20)로 캐시 목록이 바뀌어 버전업
+const CACHE_NAME = 'safewalk-v4'; // 횡단보도/신호등 전용 모델 추가(2026-09-26)로 캐시 목록이 바뀌어 버전업
 const urlsToCache = [
     './',
     './index.html',
@@ -13,12 +13,16 @@ const urlsToCache = [
     './src/detection/objectEmbedding.js',
     './src/detection/knownObjectGallery.js',
     './src/detection/trafficLightColor.js',
+    './src/detection/onnxCrosswalkDetector.js',
+    './src/detection/hazardSnapshotRecorder.js',
     './src/detection/sharpness.js',
     './src/warning/warningSystem.js',
     './src/ui/uiController.js',
     './src/utils/dataManager.js',
     './src/utils/debugLogger.js',
+    './src/utils/objectNames.js',
     './src/utils/unknownObjectExporter.js',
+    './src/utils/hazardSnapshotExporter.js',
     './src/utils/zipWriter.js',
     './src/plate/plateScanManager.js',
     './src/plate/onnxModels.js',

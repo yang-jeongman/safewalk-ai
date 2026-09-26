@@ -6,6 +6,7 @@ import { ObjectEmbedding } from './objectEmbedding.js';
 import { KnownObjectGallery } from './knownObjectGallery.js';
 import { classifyTrafficLightColor } from './trafficLightColor.js';
 import { estimateSharpness } from './sharpness.js';
+import { OnnxCrosswalkDetector } from './onnxCrosswalkDetector.js';
 import { debugLogger } from '../utils/debugLogger.js';
 
 export class DetectionManager {
@@ -65,6 +66,14 @@ export class DetectionManager {
         this.knownSimilarityThreshold = 0.7; // 실측 후 조정 필요
         this.maxEmbeddingChecksPerCycle = 2; // 사이클당 재확인 상한 (비용 제한)
         this._cropCanvas = null;
+
+        // 미지 객체 큐의 localStorage 왕복(JSON.parse+stringify, 큐가 150개 꽉 찼을 땐
+        // ~4MB)을 감지 프레임마다 동기 실행하면 메인 스레드가 막힌다 — 실측 로그
+        // (2026-09-26)에서 "로컬 큐 저장(150개 대기)" 직후 stage1 fps가 15대에서
+        // 2대로 곤두박질쳤다가 수 초 뒤에야 회복하는 패턴이 반복 확인됨. 메모리에
+        // 캐시해두고 실제 디스크 반영은 디바운스로 미룬다.
+        this._unknownQueueCache = null;
+        this._unknownQueueFlushTimer = null;
         // 분산-오브-라플라시안(src/detection/sharpness.js) 임계값. 실제 사용자가 보내준
         // 크롭 샘플로 캘리브레이션(2026-09-18): 블러 심한 것들은 4~40, 또렷한 것들은
         // 439~1969로 큰 간격이 있어 그 사이인 100으로 설정. 표본이 적어 향후 데이터가
@@ -110,7 +119,10 @@ export class DetectionManager {
             'manhole': 0.15,
             // 볼라드: 보행로 한가운데 고정된 낮은 기둥으로, 시각장애인 보행 사고의 대표
             // 원인 중 하나 — 전봇대/기둥(pole)과 동급의 실질적 충돌 위험으로 취급.
-            'bollard': 0.6
+            'bollard': 0.6,
+            // 횡단보도(onnxCrosswalkDetector.js) — 맨홀처럼 평평해 충돌 위험은 없지만,
+            // 위치를 미리 알려주는 것 자체가 안심보행 목적에 유용해 완전 무시(0)는 아님.
+            'crosswalk': 0.1
         };
 
         // 아이콘 매핑
@@ -127,8 +139,20 @@ export class DetectionManager {
             'pole': '🪧',
             'bench': '🪑',
             'manhole': '🕳️',
-            'bollard': '🚧'
+            'bollard': '🚧',
+            'crosswalk': '🚸'
         };
+
+        // 횡단보도 + 신호등 색 전용 YOLO(onnxCrosswalkDetector.js) — COCO-SSD stage2보다
+        // 느린 주기로 독립 실행하고 마지막 결과를 재사용한다. 이미 stage2 하나만으로도
+        // 실기기에서 fps가 출렁이는 게 확인된 상태라(2026-09-26 로그), 매 stage2 사이클마다
+        // 두 번째 YOLOv8 추론을 또 돌리면 부담이 커진다.
+        this.crosswalkDetector = null;
+        this.crosswalkEnabled = true;
+        this.crosswalkIntervalMs = 800;
+        this._lastCrosswalkTime = 0;
+        this._crosswalkRunning = false;
+        this._lastCrosswalkPredictions = [];
     }
 
     async init() {
@@ -182,6 +206,19 @@ export class DetectionManager {
                 this.knownGallery = null;
             }
         }
+
+        // 횡단보도/신호등 전용 모델 — 실패해도 나머지 탐지는 그대로 동작
+        if (this.crosswalkEnabled) {
+            try {
+                this.crosswalkDetector = new OnnxCrosswalkDetector();
+                await this.crosswalkDetector.load();
+                debugLogger.log('[횡단보도] 모델 로드 완료');
+            } catch (err) {
+                console.error('횡단보도 모델 초기화 실패:', err);
+                debugLogger.log(`[횡단보도] 초기화 실패, 비활성화: ${err}`);
+                this.crosswalkDetector = null;
+            }
+        }
     }
 
     async setupCamera() {
@@ -226,6 +263,14 @@ export class DetectionManager {
 
     stop() {
         this.isDetecting = false;
+
+        // 디바운스된 미지 객체 큐 쓰기가 아직 대기 중이면 유실 없이 바로 반영
+        this.flushUnknownQueue();
+
+        if (this.crosswalkDetector) {
+            this.crosswalkDetector.dispose();
+            this.crosswalkDetector = null;
+        }
 
         // 비디오 스트림 중지
         if (this.video && this.video.srcObject) {
@@ -297,6 +342,20 @@ export class DetectionManager {
         this.reportPerf(now);
     }
 
+    // 횡단보도/신호등 전용 모델을 자체 주기로 비동기 실행 — runStage2를 기다리게
+    // 하지 않고, 완료되면 다음 stage2 사이클부터 최신 결과가 반영된다.
+    scheduleCrosswalkDetection() {
+        if (!this.crosswalkDetector || this._crosswalkRunning) return;
+        if (performance.now() - this._lastCrosswalkTime < this.crosswalkIntervalMs) return;
+
+        this._lastCrosswalkTime = performance.now();
+        this._crosswalkRunning = true;
+        this.crosswalkDetector.detect(this.video)
+            .then((preds) => { this._lastCrosswalkPredictions = preds; })
+            .catch((err) => debugLogger.log(`[횡단보도] 추론 실패: ${err}`))
+            .finally(() => { this._crosswalkRunning = false; });
+    }
+
     // 2단계: COCO-SSD 분류 + 기존 위협도 로직(그대로 재사용)
     async runStage2(gate) {
         try {
@@ -309,6 +368,16 @@ export class DetectionManager {
 
             // 신호등 색 판정 (원래 특허 구상의 "빨간불 경고/초록불 안내")
             this.classifyTrafficLights(predictions);
+
+            // 횡단보도/신호등 전용 모델 결과 병합 — COCO-SSD보다 느린 자체 주기로
+            // 돌아가므로(this.crosswalkIntervalMs) 매 stage2마다 새로 추론하지 않고
+            // 마지막 결과를 재사용한다. 같은 물리적 신호등을 COCO-SSD 쪽(HSV 판정)과
+            // 중복으로 두 번 넣지 않도록 겹치는 박스는 건너뛴다.
+            this.scheduleCrosswalkDetection();
+            for (const p of this._lastCrosswalkPredictions) {
+                const duplicate = predictions.some((existing) => this.bboxOverlaps(existing.bbox, p.bbox));
+                if (!duplicate) predictions.push(p);
+            }
 
             // 일반 장애물 폴백 — 벽/기둥/전봇대처럼 COCO-SSD가 애초에 모르는
             // 물체는 박스 자체가 안 생겨서 모션게이트가 확대를 감지해도 경고로
@@ -494,7 +563,12 @@ export class DetectionManager {
             }
 
             const dataUrl = cropCanvas.toDataURL('image/jpeg', 0.6);
-            const queue = JSON.parse(localStorage.getItem('unknownObjectQueue') || '[]');
+            // 큐는 메모리에서만 갱신 — localStorage 읽기/쓰기는 flushUnknownQueue()가
+            // 디바운스해서 처리한다 (아래 설명 참고).
+            if (!this._unknownQueueCache) {
+                this._unknownQueueCache = JSON.parse(localStorage.getItem('unknownObjectQueue') || '[]');
+            }
+            const queue = this._unknownQueueCache;
             queue.push({
                 dataUrl,
                 originalClass: pred.class,
@@ -505,8 +579,26 @@ export class DetectionManager {
             // localStorage 출처당 한도(보통 5~10MB) 안에 여유 있게 들어온다. 기존 20개는 공원
             // 산책처럼 긴 세션에서 금방 밀려나 초반 관찰이 사라진다는 사용자 피드백(2026-09-18)으로 상향.
             while (queue.length > 150) queue.shift();
-            localStorage.setItem('unknownObjectQueue', JSON.stringify(queue));
-            debugLogger.log(`[오픈셋] 미지 객체 로컬 큐 저장 (${queue.length}개 대기, 디버그 패널에서 내보내기 가능)`);
+            debugLogger.log(`[오픈셋] 미지 객체 큐에 추가 (${queue.length}개 대기, 디버그 패널에서 내보내기 가능)`);
+            this.scheduleUnknownQueueFlush();
+        } catch (err) {
+            debugLogger.log(`[오픈셋] 큐 저장 실패: ${err}`);
+        }
+    }
+
+    // localStorage.setItem은 동기 호출이라 큐가 꽉 찬 상태(~4MB)로 매 프레임 쓰면
+    // 메인 스레드가 막힌다. 2초 동안 추가 요청이 없을 때 한 번만 실제로 쓴다.
+    scheduleUnknownQueueFlush() {
+        clearTimeout(this._unknownQueueFlushTimer);
+        this._unknownQueueFlushTimer = setTimeout(() => this.flushUnknownQueue(), 2000);
+    }
+
+    flushUnknownQueue() {
+        clearTimeout(this._unknownQueueFlushTimer);
+        this._unknownQueueFlushTimer = null;
+        if (!this._unknownQueueCache) return;
+        try {
+            localStorage.setItem('unknownObjectQueue', JSON.stringify(this._unknownQueueCache));
         } catch (err) {
             debugLogger.log(`[오픈셋] 큐 저장 실패: ${err}`);
         }

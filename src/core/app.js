@@ -8,6 +8,8 @@ import { exportUnknownObjectQueue } from '../utils/unknownObjectExporter.js';
 import { PlateScanManager } from '../plate/plateScanManager.js';
 import { parsePlateCsv } from '../plate/plateMatcher.js';
 import { exportPlateTestLog } from '../plate/plateTestLogExporter.js';
+import { HazardSnapshotRecorder } from '../detection/hazardSnapshotRecorder.js';
+import { exportHazardSnapshots } from '../utils/hazardSnapshotExporter.js';
 
 class SafeWalkApp {
     constructor() {
@@ -28,6 +30,11 @@ class SafeWalkApp {
         this.plateScanReady = false;
         this._plateScanInitInFlight = false; // 중복 시작 방지
         this._plateScanStopRequested = false; // 초기화 도중 정지 요청됐는지 (레이스 방지)
+
+        // 위험요소 수동 스냅샷(맨홀/계단/에스컬레이터/웅덩이/싱크홀 등)
+        this.hazardSnapshotRecorder = null;
+        this.hazardSnapshotMode = 'photo'; // 'photo' | 'video'
+        this._hazardSnapshotBusy = false; // 동영상 녹화(5초) 중 중복 요청 방지
     }
 
     async init() {
@@ -108,6 +115,10 @@ class SafeWalkApp {
             // 버튼을 비활성화해 연타로 인한 중복 내보내기를 막는다.
             const btn = e.currentTarget;
             btn.disabled = true;
+            // 감지 루프가 최근 큐에 추가한 항목이 디바운스된 localStorage 쓰기를
+            // 아직 기다리고 있을 수 있다(detectionManager.js scheduleUnknownQueueFlush) —
+            // 내보내기 전에 강제로 반영해 방금 잡은 항목이 누락되지 않게 한다.
+            if (this.detectionManager) this.detectionManager.flushUnknownQueue();
             debugLogger.log('[오픈셋] 미지 객체 내보내는 중...');
             try {
                 const { count, blob, filename } = await exportUnknownObjectQueue();
@@ -142,6 +153,7 @@ class SafeWalkApp {
         });
 
         this.bindPlateScanEvents();
+        this.bindHazardSnapshotEvents();
 
         // 화면이 백그라운드로 가거나(앱 전환, 화면 잠금) 탭/앱이 실제로 닫히는 시점 —
         // 20초 주기 체크포인트(startWalkTimer)만으로는 그 사이 구간이 통째로 빌 수 있고,
@@ -160,9 +172,22 @@ class SafeWalkApp {
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') {
                 checkpointNow();
+                this._hiddenAt = Date.now();
                 // 번호판 조회 모드는 카메라를 계속 켜두면 배터리 소모 + 백그라운드에서
                 // 인식 시도가 이어지는 문제가 있어 화면이 가려지면 바로 멈춘다.
                 if (this.plateScanManager) this.stopPlateScanning();
+            } else if (document.visibilityState === 'visible') {
+                // 실측 로그(2026-09-26)에서 확인된 문제: 보행 모드 중 화면이 잠기면
+                // 브라우저가 requestAnimationFrame을 강하게 스로틀링해(stage1 fps가
+                // 0.7까지 떨어짐) 탐지가 사실상 멈추는데, 사용자에게는 아무 안내가
+                // 없어 "위험 감지가 계속되고 있다"고 착각한 채 몇 초~수십 초를 걸을
+                // 수 있다. 화면이 오래(5초 이상) 꺼져 있다 돌아왔을 때만 안내한다 —
+                // 짧은 깜빡임까지 매번 경고하면 오히려 성가시다.
+                const hiddenMs = this._hiddenAt ? Date.now() - this._hiddenAt : 0;
+                this._hiddenAt = null;
+                if (this.isWalking && hiddenMs > 5000) {
+                    this.warningSystem.info('화면이 꺼진 동안 위험 감지가 중단되었습니다. 걷는 동안은 화면을 켜두세요');
+                }
             }
         });
         window.addEventListener('pagehide', checkpointNow);
@@ -204,6 +229,9 @@ class SafeWalkApp {
             this.detectionManager = manager;
             debugLogger.log('[카메라] 초기화 완료 (모델 로드 + getUserMedia 성공)');
 
+            // 위험요소 수동 스냅샷 — detectionManager와 같은 비디오 스트림을 공유한다
+            this.hazardSnapshotRecorder = new HazardSnapshotRecorder(this.detectionManager.video);
+
             // 탐지 콜백 설정
             this.detectionManager.onDetection = (threats) => this.handleDetection(threats);
 
@@ -233,6 +261,8 @@ class SafeWalkApp {
             this.detectionManager.stop();
             this.detectionManager = null;
         }
+        this.hazardSnapshotRecorder = null;
+        this.uiController.hideHazardSnapshotPanel();
 
         // 타이머 중지
         if (this.walkTimer) {
@@ -314,6 +344,75 @@ class SafeWalkApp {
             this.dataManager.analyzeDangerPatterns()
         ]);
         this.uiController.renderReport(stats, patterns);
+    }
+
+    // 위험요소 수동 스냅샷 — 보행 중 맨홀/계단/에스컬레이터/웅덩이/싱크홀 등을 발견하면
+    // 사용자가 직접 사진/동영상으로 기록해서 나중에 라벨링 데이터로 쓴다(2026-09-26).
+    bindHazardSnapshotEvents() {
+        const btnToggle = document.getElementById('btnHazardSnapshotToggle');
+        const panel = document.getElementById('hazardSnapshotPanel');
+        if (btnToggle && panel) {
+            btnToggle.addEventListener('click', () => {
+                panel.hidden = !panel.hidden;
+            });
+        }
+
+        document.querySelectorAll('.hazard-mode-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                this.hazardSnapshotMode = btn.dataset.mode;
+                document.querySelectorAll('.hazard-mode-btn').forEach((b) => b.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+
+        document.querySelectorAll('.hazard-category-btn').forEach((btn) => {
+            btn.addEventListener('click', () => this.captureHazardSnapshot(btn.dataset.category, btn));
+        });
+
+        const btnExport = document.getElementById('btnHazardExport');
+        if (btnExport) {
+            btnExport.addEventListener('click', async (e) => {
+                const el = e.currentTarget;
+                el.disabled = true;
+                debugLogger.log('[위험요소] 스냅샷 내보내는 중...');
+                try {
+                    const { count, blob, filename } = await exportHazardSnapshots(this.dataManager);
+                    if (count > 0) {
+                        this.uiController.presentDownload(blob, filename, `위험요소 스냅샷 ${count}개 ZIP 준비됨`);
+                    } else {
+                        debugLogger.log('[위험요소] 내보낼 스냅샷이 없습니다');
+                    }
+                } finally {
+                    el.disabled = false;
+                }
+            });
+        }
+    }
+
+    async captureHazardSnapshot(category, btn) {
+        if (!this.hazardSnapshotRecorder || this._hazardSnapshotBusy) return;
+        this._hazardSnapshotBusy = true;
+
+        try {
+            let snapshot;
+            if (this.hazardSnapshotMode === 'video') {
+                btn.classList.add('recording');
+                debugLogger.log(`[위험요소] ${category} 동영상 녹화 시작(5초)`);
+                snapshot = await this.hazardSnapshotRecorder.recordVideo(category);
+            } else {
+                snapshot = this.hazardSnapshotRecorder.capturePhoto(category);
+            }
+
+            await this.dataManager.saveHazardSnapshot(snapshot);
+            debugLogger.log(`[위험요소] ${category} ${snapshot.mediaType === 'video' ? '동영상' : '사진'} 저장 완료`);
+            this.uiController.showAlert(`${category} 기록됨`, 'success');
+        } catch (err) {
+            debugLogger.log(`[위험요소] 기록 실패: ${err}`);
+            this.uiController.showAlert('기록 실패', 'error');
+        } finally {
+            btn.classList.remove('recording');
+            this._hazardSnapshotBusy = false;
+        }
     }
 
     // 번호판 조회 모드 (관리자 도구, 테스트/파일럿용 — docs/지자체 체납차량 조회 시스템

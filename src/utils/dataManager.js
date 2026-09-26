@@ -2,8 +2,8 @@
 export class DataManager {
     constructor() {
         this.dbName = 'SafeWalkDB';
-        // v3: 번호판 인식 정확도 테스트 로그(당일 한정, 자정 지나면 파기) 스토어 추가.
-        this.dbVersion = 3;
+        // v4: 위험요소 수동 스냅샷(맨홀/계단/에스컬레이터/웅덩이/싱크홀) 스토어 추가.
+        this.dbVersion = 4;
         this.db = null;
     }
 
@@ -84,6 +84,19 @@ export class DataManager {
                         autoIncrement: true
                     });
                     testLogStore.createIndex('date', 'date', { unique: false });
+                }
+
+                // 위험요소 수동 스냅샷 — 보행 중 맨홀/계단/에스컬레이터/웅덩이/싱크홀 등을
+                // 발견하면 사용자가 직접 찍어 라벨링 데이터로 쌓는다(2026-09-26). 사진은
+                // dataUrl로, 동영상은 Blob으로 그대로 저장(용량이 커서 base64로 부풀리지
+                // 않음) — IndexedDB는 구조화 복제로 Blob을 그대로 지원한다.
+                if (!db.objectStoreNames.contains('hazardSnapshots')) {
+                    const hazardStore = db.createObjectStore('hazardSnapshots', {
+                        keyPath: 'id',
+                        autoIncrement: true
+                    });
+                    hazardStore.createIndex('timestamp', 'timestamp', { unique: false });
+                    hazardStore.createIndex('category', 'category', { unique: false });
                 }
 
                 console.log('데이터베이스 스키마 생성 완료');
@@ -287,6 +300,36 @@ export class DataManager {
     async clearTestLogNow() {
         const transaction = this.db.transaction(['plateTestLog'], 'readwrite');
         transaction.objectStore('plateTestLog').clear();
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    // 위험요소 수동 스냅샷 저장. snapshot: { category, mediaType: 'photo'|'video',
+    // dataUrl(사진만), blob(동영상만), mimeType(동영상만) }
+    async saveHazardSnapshot(snapshot) {
+        const transaction = this.db.transaction(['hazardSnapshots'], 'readwrite');
+        transaction.objectStore('hazardSnapshots').add({
+            timestamp: Date.now(),
+            category: snapshot.category,
+            mediaType: snapshot.mediaType,
+            dataUrl: snapshot.dataUrl || null,
+            blob: snapshot.blob || null,
+            mimeType: snapshot.mimeType || null
+        });
+        return new Promise((resolve) => {
+            transaction.oncomplete = () => resolve();
+        });
+    }
+
+    async getHazardSnapshots() {
+        const snapshots = await this.getAllFromStore('hazardSnapshots');
+        return snapshots.sort((a, b) => b.timestamp - a.timestamp);
+    }
+
+    async clearHazardSnapshots() {
+        const transaction = this.db.transaction(['hazardSnapshots'], 'readwrite');
+        transaction.objectStore('hazardSnapshots').clear();
         return new Promise((resolve) => {
             transaction.oncomplete = () => resolve();
         });

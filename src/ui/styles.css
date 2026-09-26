@@ -384,6 +384,74 @@ body {
     background: rgba(33, 150, 243, 0.9);
 }
 
+/* 위험요소 수동 스냅샷 */
+.hazard-snapshot-fab {
+    position: absolute;
+    right: 16px;
+    bottom: 110px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.6);
+    border: 2px solid rgba(255,255,255,0.5);
+    font-size: 22px;
+    color: white;
+    z-index: 5;
+}
+
+.hazard-snapshot-panel {
+    position: absolute;
+    right: 16px;
+    bottom: 170px;
+    width: 220px;
+    background: rgba(0,0,0,0.85);
+    border-radius: var(--radius);
+    padding: 12px;
+    z-index: 5;
+}
+
+.hazard-mode-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.hazard-mode-btn {
+    flex: 1;
+    padding: 6px 4px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+    background: rgba(255,255,255,0.08);
+    border-radius: 6px;
+}
+
+.hazard-mode-btn.active {
+    color: white;
+    background: rgba(255,255,255,0.25);
+}
+
+.hazard-category-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.hazard-category-btn {
+    padding: 10px 4px;
+    font-size: 13px;
+    color: white;
+    background: rgba(255,255,255,0.12);
+    border-radius: 8px;
+}
+
+.hazard-category-btn:active {
+    background: rgba(255,255,255,0.3);
+}
+
+.hazard-category-btn.recording {
+    background: rgba(220,53,69,0.8);
+}
+
 /* 위험도 표시 */
 .walking-info {
     position: absolute;

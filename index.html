@@ -113,6 +113,23 @@
         <!-- 위험 알림 영역 -->
         <div id="alertZone" class="alert-zone"></div>
 
+        <!-- 위험요소 수동 스냅샷 — 맨홀/계단/에스컬레이터/웅덩이/싱크홀 등을 직접 발견했을 때 기록 -->
+        <button id="btnHazardSnapshotToggle" class="hazard-snapshot-fab" title="위험요소 기록">⚠️</button>
+        <div id="hazardSnapshotPanel" class="hazard-snapshot-panel" hidden>
+            <div class="hazard-mode-toggle">
+                <button class="hazard-mode-btn active" data-mode="photo">📷 사진</button>
+                <button class="hazard-mode-btn" data-mode="video">🎥 동영상(5초)</button>
+            </div>
+            <div class="hazard-category-grid">
+                <button class="hazard-category-btn" data-category="manhole">🕳️ 맨홀</button>
+                <button class="hazard-category-btn" data-category="stairs">🪜 계단</button>
+                <button class="hazard-category-btn" data-category="escalator">🛗 에스컬레이터</button>
+                <button class="hazard-category-btn" data-category="puddle">💧 웅덩이</button>
+                <button class="hazard-category-btn" data-category="sinkhole">🕳️ 싱크홀</button>
+                <button class="hazard-category-btn" data-category="other">➕ 기타</button>
+            </div>
+        </div>
+
         <!-- 하단 정보 -->
         <div class="walking-info">
             <div class="danger-level" id="dangerLevel">
@@ -309,6 +326,7 @@
             <span>디버그 로그</span>
             <button id="btnDebugGate" class="debug-panel-btn">게이트 토글</button>
             <button id="btnDebugExport" class="debug-panel-btn">미지 객체 내보내기</button>
+            <button id="btnHazardExport" class="debug-panel-btn">위험요소 스냅샷 내보내기</button>
             <button id="btnDebugLogExport" class="debug-panel-btn">로그 내보내기</button>
             <button id="btnDebugClear" class="debug-panel-btn">지우기</button>
             <button id="btnDebugClose" class="debug-panel-btn">닫기</button>
